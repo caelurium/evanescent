@@ -1,0 +1,6 @@
+apiVersion: evanescent.caelurium.github.io/v1alpha1
+kind: EphemeralEnvironment
+metadata:
+  name: demo
+  namespace: evanescent-system
+spec: {}

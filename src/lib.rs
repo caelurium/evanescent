@@ -1,3 +1,3 @@
-//! Building blocks for the Evanescent preview environment operator.
+//! Kubernetes API types for the Evanescent operator.
 
-pub mod preview;
+pub mod environment;
