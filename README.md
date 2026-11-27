@@ -5,8 +5,9 @@ A Kubernetes operator for ephemeral environments.
 Evanescent watches `EphemeralEnvironment` requests in `evanescent-system`. It
 creates one Kubernetes namespace per request, records its name in
 `.status.namespace`, and waits for that namespace to disappear when the request
-is deleted. The operator image bundles Helm v4.3.2 but does not install
-charts yet. Environments do not expire automatically.
+is deleted. Requests can opt into a bundled PostgREST and Postgres demo stack
+that the operator installs and upgrades with Helm v4.3.2. Environments do not
+expire automatically.
 
 ## Development
 
@@ -26,9 +27,10 @@ bash scripts/kind-smoke.sh
 ```
 
 This builds the operator image, runs it as the controller service account in a
-fresh cluster, and checks the bundled Helm version, namespace creation, restart
-without replacing the namespace, and cleanup. It removes the test cluster on
-exit. GitHub Actions runs the same test on pull requests.
+fresh cluster, and checks Helm install, restart without replacing the release,
+an API upgrade that preserves a database row, and cleanup of the release,
+namespace, and persistent volume. It removes the test cluster on exit. GitHub
+Actions runs the same test on pull requests.
 
 To try it interactively, build and load the image, then deploy the controller
 into a disposable cluster:
@@ -52,6 +54,25 @@ kubectl apply -f examples/ephemeral-environment.yaml
 kubectl -n evanescent-system get ephemeralenvironment demo -o yaml
 kubectl -n evanescent-system delete ephemeralenvironment demo
 ```
+
+To deploy the demo stack instead, apply `examples/api-postgres-environment.yaml`.
+The cluster needs a default StorageClass with dynamic provisioning. Use
+`.status.stack.ready` and check that `.status.stack.observedGeneration` matches
+`.metadata.generation` before treating the stack as ready. Changing
+`spec.apiPostgres.apiVersion` from `v16.5` to `v16.6` upgrades the same release
+without replacing the database. Delete the request to remove the stack.
+
+The demo is for trusted, disposable clusters. It exposes an unauthenticated
+API via an internal Service and initializes a synthetic `notes` table. It does
+not accept arbitrary images, external charts, or user-supplied credentials.
+Postgres credentials are generated per environment. Helm stores release data
+in namespace-local Secrets. The controller can bind its Helm role only in
+its workload namespaces, enforced by a validating admission policy.
+
+If an interrupted Helm command leaves a pending release, the controller
+reports `ReleasePending` rather than forcing an upgrade or deleting the
+database. An administrator can inspect the release, recover it, or delete
+the environment to tear it down.
 
 Keep the controller running until the request is deleted, then run
 `kind delete cluster --name evanescent --kubeconfig ./kind.kubeconfig`.

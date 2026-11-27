@@ -36,6 +36,49 @@ roleRef:
   kind: Role
   name: evanescent
 ---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: evanescent-helm-bindings
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [rbac.authorization.k8s.io]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [rolebindings]
+        scope: Namespaced
+  matchConditions:
+    - name: controller
+      expression: "request.userInfo.username == 'system:serviceaccount:evanescent-system:evanescent'"
+  validations:
+    - expression: >-
+        namespaceObject != null &&
+        has(namespaceObject.metadata.labels) &&
+        'evanescent.caelurium.github.io/environment-uid' in namespaceObject.metadata.labels &&
+        request.namespace == 'evanescent-' +
+          namespaceObject.metadata.labels['evanescent.caelurium.github.io/environment-uid']
+      message: Evanescent can bind Helm access only inside its workload namespaces.
+    - expression: >-
+        object.metadata.name == 'evanescent-helm' &&
+        object.roleRef.kind == 'ClusterRole' &&
+        object.roleRef.name == 'evanescent-helm' &&
+        has(object.subjects) && size(object.subjects) == 1 &&
+        object.subjects.all(subject,
+          subject.kind == 'ServiceAccount' &&
+          subject.name == 'evanescent' &&
+          has(subject.namespace) && subject.namespace == 'evanescent-system')
+      message: Evanescent can bind only its Helm role to its own service account.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: evanescent-helm-bindings
+spec:
+  policyName: evanescent-helm-bindings
+  validationActions: [Deny]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -44,6 +87,17 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get, create, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [create]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    resourceNames: [evanescent-helm]
+    verbs: [get]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles]
+    resourceNames: [evanescent-helm]
+    verbs: [bind]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -57,3 +111,18 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: evanescent-namespaces
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: evanescent-helm
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets, services]
+    verbs: [get, list, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets]
+    verbs: [get, list, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list]

@@ -3,5 +3,8 @@
 !Cargo.lock
 !rust-toolchain.toml
 !README.md
+!charts/
+!charts/api-postgres/
+!charts/api-postgres/**
 !src/
 !src/**

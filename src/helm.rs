@@ -1,0 +1,202 @@
+use std::{io, process::Output, time::Duration};
+
+use serde::Deserialize;
+use thiserror::Error;
+use tokio::{process::Command, time::timeout};
+
+const RELEASE: &str = "evanescent";
+const CHART: &str = "/opt/evanescent/charts/api-postgres";
+const HELM_TIMEOUT: &str = "120s";
+const INSPECT_TIMEOUT: Duration = Duration::from_secs(20);
+// A failed upgrade can use the wait timeout again for its rollback.
+const RELEASE_TIMEOUT: Duration = Duration::from_secs(270);
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("cannot run helm {operation}: {source}")]
+    Process {
+        operation: &'static str,
+        source: io::Error,
+    },
+    #[error("helm {0} exceeded its process timeout")]
+    Timeout(&'static str),
+    #[error("helm {operation} exited with {status}")]
+    Exit {
+        operation: &'static str,
+        status: std::process::ExitStatus,
+    },
+    #[error("could not decode the Helm release status")]
+    InvalidStatus,
+    #[error("the Helm release has an incomplete operation")]
+    Pending,
+}
+
+#[derive(Deserialize)]
+struct Release {
+    revision: i32,
+    status: String,
+    #[serde(default)]
+    description: String,
+}
+
+enum ReleaseAction {
+    Keep(i32),
+    Upgrade,
+    Wait,
+}
+
+fn release_action(release: Option<Release>, desired: &str) -> ReleaseAction {
+    match release {
+        Some(release) if release.status == "deployed" && release.description == desired => {
+            ReleaseAction::Keep(release.revision)
+        }
+        Some(release)
+            if release.status.starts_with("pending-") || release.status == "uninstalling" =>
+        {
+            ReleaseAction::Wait
+        }
+        _ => ReleaseAction::Upgrade,
+    }
+}
+
+pub async fn deploy(namespace: &str, image: &str, desired: &str) -> Result<i32, Error> {
+    match release_action(latest_release(namespace).await?, desired) {
+        ReleaseAction::Keep(revision) => return Ok(revision),
+        // Don't delete data or guess whether an interrupted operation is safe to repeat.
+        ReleaseAction::Wait => return Err(Error::Pending),
+        ReleaseAction::Upgrade => {}
+    }
+
+    let values = format!("api.image={image}");
+    let output = run(
+        "upgrade",
+        namespace,
+        &[
+            "--install",
+            CHART,
+            "--set-string",
+            &values,
+            "--description",
+            desired,
+            "--hide-notes",
+            "--wait=legacy",
+            "--timeout",
+            HELM_TIMEOUT,
+            "--rollback-on-failure",
+            "--history-max=5",
+        ],
+        RELEASE_TIMEOUT,
+    )
+    .await?;
+    succeeded("upgrade", output)?;
+    match release_action(latest_release(namespace).await?, desired) {
+        ReleaseAction::Keep(revision) => Ok(revision),
+        _ => Err(Error::InvalidStatus),
+    }
+}
+
+pub async fn uninstall(namespace: &str) -> Result<(), Error> {
+    let output = run(
+        "uninstall",
+        namespace,
+        &[
+            "--ignore-not-found",
+            "--cascade=foreground",
+            "--wait=legacy",
+            "--timeout",
+            HELM_TIMEOUT,
+        ],
+        RELEASE_TIMEOUT,
+    )
+    .await?;
+    succeeded("uninstall", output)?;
+    Ok(())
+}
+
+async fn latest_release(namespace: &str) -> Result<Option<Release>, Error> {
+    let output = run(
+        "history",
+        namespace,
+        &["--output=json", "--max=1"],
+        INSPECT_TIMEOUT,
+    )
+    .await?;
+    if !output.status.success()
+        && String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .any(|line| line.trim() == "Error: release: not found")
+    {
+        return Ok(None);
+    }
+    decode_latest(&succeeded("history", output)?)
+}
+
+fn succeeded(operation: &'static str, output: Output) -> Result<Vec<u8>, Error> {
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        // Helm output can contain rendered Secrets. Do not attach it to errors.
+        Err(Error::Exit {
+            operation,
+            status: output.status,
+        })
+    }
+}
+
+fn decode_latest(stdout: &[u8]) -> Result<Option<Release>, Error> {
+    let releases: Vec<Release> =
+        serde_json::from_slice(stdout).map_err(|_| Error::InvalidStatus)?;
+    Ok(releases.into_iter().max_by_key(|release| release.revision))
+}
+
+async fn run(
+    operation: &'static str,
+    namespace: &str,
+    args: &[&str],
+    deadline: Duration,
+) -> Result<Output, Error> {
+    let mut command = Command::new("helm");
+    command
+        .args([operation, RELEASE, "--namespace", namespace])
+        .args(args)
+        .env("HELM_DRIVER", "secret")
+        .kill_on_drop(true);
+    timeout(deadline, command.output())
+        .await
+        .map_err(|_| Error::Timeout(operation))?
+        .map_err(|source| Error::Process { operation, source })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ReleaseAction, decode_latest, release_action};
+
+    #[test]
+    fn only_mutates_releases_that_need_reconciliation() {
+        let release = || {
+            decode_latest(br#"[{"revision":3,"status":"deployed","description":"desired"}]"#)
+                .unwrap()
+        };
+        assert!(matches!(
+            release_action(release(), "desired"),
+            ReleaseAction::Keep(3)
+        ));
+        assert!(matches!(
+            release_action(release(), "changed"),
+            ReleaseAction::Upgrade
+        ));
+        assert!(matches!(
+            release_action(None, "desired"),
+            ReleaseAction::Upgrade
+        ));
+    }
+
+    #[test]
+    fn leaves_pending_releases_for_explicit_recovery() {
+        let release = decode_latest(br#"[{"revision":2,"status":"pending-upgrade"}]"#).unwrap();
+        assert!(matches!(
+            release_action(release, "desired"),
+            ReleaseAction::Wait
+        ));
+    }
+}

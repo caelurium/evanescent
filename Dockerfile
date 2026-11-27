@@ -24,6 +24,7 @@ FROM debian:trixie-slim
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /build/target/release/evanescent /usr/local/bin/evanescent
 COPY --from=build /usr/local/bin/helm /usr/local/bin/helm
+COPY charts/api-postgres/ /opt/evanescent/charts/api-postgres/
 
 ENV HOME=/home/evanescent
 RUN install -d -o 65532 -g 65532 -m 0755 "$HOME"
