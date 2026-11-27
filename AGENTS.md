@@ -10,6 +10,7 @@ A Rust Kubernetes operator for ephemeral environments.
 - `src/controller.rs` owns reconciliation and namespace cleanup.
   `src/main.rs` handles startup and client setup.
 - `manifests/rbac.yaml` defines the controller's permissions.
+  `manifests/deployment.yaml` runs the image built by `Dockerfile`.
   `scripts/kind-smoke.sh` exercises the lifecycle against a real Kubernetes API.
 
 ## Rust modules
@@ -50,9 +51,9 @@ cargo test --locked --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 ```
 
-For changes to reconciliation, RBAC, or the resource manifests, run
-`bash scripts/kind-smoke.sh` with Docker, kind, kubectl, and jq. The PR workflow
-also runs the smoke test and the shared Rust structure check.
+For changes to reconciliation, RBAC, manifests, or the operator image, run
+`bash scripts/kind-smoke.sh` with Docker, kind, and kubectl. The PR workflow also
+runs the smoke test and the shared Rust structure check.
 
 ## Contributions
 

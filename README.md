@@ -5,8 +5,8 @@ A Kubernetes operator for ephemeral environments.
 Evanescent watches `EphemeralEnvironment` requests in `evanescent-system`. It
 creates one Kubernetes namespace per request, records its name in
 `.status.namespace`, and waits for that namespace to disappear when the request
-is deleted. It does not install workloads or expire environments automatically
-yet.
+is deleted. The operator image bundles Helm v4.3.2 but does not install
+charts yet. Environments do not expire automatically.
 
 ## Development
 
@@ -19,25 +19,29 @@ Pull requests run formatting, Clippy, tests, documentation, and the shared
 
 ### Try it with kind
 
-With Docker running and `kind` 0.33 or later, `kubectl`, and `jq` installed:
+With Docker running and `kind` 0.33 or later and `kubectl` installed:
 
 ```sh
 bash scripts/kind-smoke.sh
 ```
 
-This builds the controller, creates a fresh local cluster, and checks namespace
-creation, restart without replacing the namespace, and cleanup. It removes the
-test cluster on exit. GitHub Actions runs the same test on pull requests.
+This builds the operator image, runs it as the controller service account in a
+fresh cluster, and checks the bundled Helm version, namespace creation, restart
+without replacing the namespace, and cleanup. It removes the test cluster on
+exit. GitHub Actions runs the same test on pull requests.
 
-To try it interactively, install the CRD and RBAC and start the controller
-against a disposable cluster:
+To try it interactively, build and load the image, then deploy the controller
+into a disposable cluster:
 
 ```sh
+docker build -t evanescent:dev .
 kind create cluster --name evanescent --kubeconfig ./kind.kubeconfig
 export KUBECONFIG="$PWD/kind.kubeconfig"
+kind load docker-image evanescent:dev --name evanescent
 kubectl apply -f manifests/ephemeralenvironments.crd.yaml -f manifests/rbac.yaml
 kubectl wait --for=condition=Established crd/ephemeralenvironments.evanescent.caelurium.github.io
-cargo run --locked
+kubectl apply -f manifests/deployment.yaml
+kubectl -n evanescent-system rollout status deployment/evanescent --timeout=90s
 ```
 
 Then, in another terminal:
@@ -49,7 +53,7 @@ kubectl -n evanescent-system get ephemeralenvironment demo -o yaml
 kubectl -n evanescent-system delete ephemeralenvironment demo
 ```
 
-Keep the controller running until the request is deleted, then stop it and run
+Keep the controller running until the request is deleted, then run
 `kind delete cluster --name evanescent --kubeconfig ./kind.kubeconfig`.
 Run only one controller instance; leader election is not implemented. Delete
 all requests before uninstalling the controller so their namespaces can be
