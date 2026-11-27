@@ -2,8 +2,10 @@
 
 A Kubernetes operator for ephemeral environments.
 
-This starter crate defines the default preview lifetime. It does not yet run
-a Kubernetes controller or install Helm charts.
+Evanescent defines a namespaced `EphemeralEnvironment` API for requesting a
+dedicated workload namespace. The [CRD](manifests/ephemeralenvironments.crd.yaml)
+and [example request](examples/ephemeral-environment.yaml) show the API shape.
+There is no controller yet, so creating a request does not provision a namespace.
 
 ## Development
 
