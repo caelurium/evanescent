@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.0](https://github.com/caelurium/evanescent/compare/v0.2.0...v0.3.0) (2026-11-27)
+
+
+### Features
+
+* bundle Helm in the operator image ([784a505](https://github.com/caelurium/evanescent/commit/784a505c5ea3df6e84a63a05451e1e7e2cbae1d2))
+* bundle Helm in the operator image ([ba62b8f](https://github.com/caelurium/evanescent/commit/ba62b8f6bd88c86b0de3a6a5c04c36d7cdcd57a5))
+* reconcile a bundled Helm stack ([9574f15](https://github.com/caelurium/evanescent/commit/9574f159294640c0e255c7dea9774d20974594c8))
+* reconcile a bundled Helm stack ([0c8be65](https://github.com/caelurium/evanescent/commit/0c8be65d1d5f3bc1228bab081f9bd43f0e1ee3a8))
+
 ## [0.2.0](https://github.com/caelurium/evanescent/compare/v0.1.0...v0.2.0) (2026-11-27)
 
 
