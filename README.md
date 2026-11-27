@@ -9,6 +9,28 @@ is deleted. Requests can opt into a bundled PostgREST and Postgres demo stack
 that the operator installs and upgrades with Helm v4.3.2, and set a lifetime
 for automatic cleanup.
 
+## Install a release on a cluster
+
+Use a release that has a matching `ghcr.io/caelurium/evanescent` image, and
+apply the manifests from that same release. These commands require cluster
+administrator access to install the CRD, RBAC, and validating admission policy.
+
+```sh
+version=vX.Y.Z
+git clone --depth 1 --branch "$version" https://github.com/caelurium/evanescent.git
+cd evanescent
+kubectl apply -f manifests/ephemeralenvironments.crd.yaml -f manifests/rbac.yaml
+kubectl wait --for=condition=Established --timeout=60s crd/ephemeralenvironments.evanescent.caelurium.github.io
+kubectl set image --local -f manifests/deployment.yaml \
+  "evanescent=ghcr.io/caelurium/evanescent:$version" -o yaml | kubectl apply -f -
+kubectl -n evanescent-system rollout status deployment/evanescent --timeout=90s
+```
+
+GHCR packages start private. A maintainer can make the package public for
+anonymous pulls; otherwise configure an image pull secret in
+`evanescent-system` and reference it from the `evanescent` ServiceAccount or
+Deployment before deploying.
+
 ## Development
 
 ```sh
@@ -103,8 +125,12 @@ cleaned up.
 ## Releases
 
 After checks pass on `main`, Release Please uses Conventional Commits to
-update a release PR. Merging that PR publishes a GitHub release and tag; it
-does not publish to crates.io.
+update a release PR. Merging that PR publishes a GitHub release and tag, which
+triggers a separate workflow to publish the matching `linux/amd64` and
+`linux/arm64` operator image to GHCR. The image uses the GitHub release tag (for
+example, `v0.4.0`), not `latest`. Nothing is published to crates.io.
+If the registry publish fails, rerun the **Operator image** workflow for that
+release.
 
 To enable publishing, configure the `RELEASE_PLEASE_TOKEN` Actions secret
 with access to create release PRs and publish releases in this repository.
