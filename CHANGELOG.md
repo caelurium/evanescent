@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.0](https://github.com/caelurium/evanescent/compare/v0.1.0...v0.2.0) (2026-11-27)
+
+
+### Features
+
+* define the EphemeralEnvironment API ([c33e33c](https://github.com/caelurium/evanescent/commit/c33e33c86467c6d64ec2e9d17eb8a40058c66b35))
+* reconcile ephemeral environment namespaces ([5e651a2](https://github.com/caelurium/evanescent/commit/5e651a2c2a5487186a575fddd8007e7dd9eeac91))
+* reconcile ephemeral environment namespaces ([b86f8c0](https://github.com/caelurium/evanescent/commit/b86f8c0fa9ff88b9b0a7b3e058eb6a89976c1eb2))
+
 ## 0.1.0 (2026-11-27)
 
 
