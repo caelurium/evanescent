@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/caelurium/evanescent/compare/v0.3.0...v0.4.0) (2026-11-27)
+
+
+### Features
+
+* expire environments after an optional lifetime ([bbd7bd9](https://github.com/caelurium/evanescent/commit/bbd7bd9f9fdad8b0aaf99c1ce458f0b52be0f037))
+* expire environments after an optional lifetime ([0ba70ac](https://github.com/caelurium/evanescent/commit/0ba70acbb7b5cb91802cb24e6cbf470f3476e14d))
+
 ## [0.3.0](https://github.com/caelurium/evanescent/compare/v0.2.0...v0.3.0) (2026-11-27)
 
 
