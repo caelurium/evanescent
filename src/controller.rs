@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-use evanescent::environment::EphemeralEnvironment;
+use evanescent::environment::{EphemeralEnvironment, EphemeralEnvironmentStatus, StackStatus};
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::Namespace;
 use kube::{
@@ -8,7 +8,7 @@ use kube::{
     api::{DeleteParams, ObjectMeta, Patch, PatchParams, PostParams, Preconditions},
     runtime::{
         Controller,
-        controller::{Action, Error as ControllerError},
+        controller::{Action, Config, Error as ControllerError},
         finalizer::{self, Event, finalizer},
         watcher,
     },
@@ -16,11 +16,14 @@ use kube::{
 use serde_json::json;
 use thiserror::Error;
 
+use crate::stack;
+
 const CONTROL_NAMESPACE: &str = "evanescent-system";
 const FINALIZER: &str = "evanescent.caelurium.github.io/namespace-cleanup";
 const OWNER_LABEL: &str = "evanescent.caelurium.github.io/environment-uid";
 
 struct Context {
+    client: Client,
     environments: Api<EphemeralEnvironment>,
     namespaces: Api<Namespace>,
 }
@@ -35,12 +38,15 @@ enum ReconcileError {
     OwnershipConflict(String),
     #[error("waiting for namespace deletion")]
     NamespaceDeleting,
+    #[error(transparent)]
+    Stack(#[from] stack::Error),
 }
 
 pub async fn run(client: Client) {
     let ctx = Arc::new(Context {
         environments: Api::namespaced(client.clone(), CONTROL_NAMESPACE),
-        namespaces: Api::all(client),
+        namespaces: Api::all(client.clone()),
+        client,
     });
 
     tracing::info!(
@@ -48,6 +54,7 @@ pub async fn run(client: Client) {
         "watching ephemeral environments"
     );
     Controller::new(ctx.environments.clone(), watcher::Config::default())
+        .with_config(Config::default().concurrency(4))
         .shutdown_on_signal()
         .run(reconcile, error_policy, ctx)
         .for_each(|result| async {
@@ -100,20 +107,59 @@ async fn apply(env: &EphemeralEnvironment, ctx: &Context) -> Result<Action, Reco
     }
 
     if env.status.as_ref().map(|status| status.namespace.as_str()) != Some(name.as_str()) {
+        update_status(env, ctx, name, None).await?;
+        return Ok(Action::requeue(Duration::ZERO));
+    }
+
+    if let Some(spec) = &env.spec.api_postgres {
+        let generation = env.metadata.generation.unwrap_or_default();
+        match stack::reconcile(
+            ctx.client.clone(),
+            &name,
+            CONTROL_NAMESPACE,
+            spec.api_version,
+            generation,
+        )
+        .await
+        {
+            Ok(status) => update_status(env, ctx, name, Some(status)).await?,
+            Err(error) => {
+                let status = StackStatus {
+                    observed_generation: generation,
+                    ready: false,
+                    reason: error.reason(),
+                    release_revision: None,
+                };
+                update_status(env, ctx, name, Some(status)).await?;
+                return Err(error.into());
+            }
+        }
+    }
+
+    // Check for out-of-band namespace deletion without a cluster-wide watch.
+    Ok(Action::requeue(Duration::from_secs(30)))
+}
+
+async fn update_status(
+    env: &EphemeralEnvironment,
+    ctx: &Context,
+    namespace: String,
+    stack: Option<StackStatus>,
+) -> Result<(), kube::Error> {
+    let status = EphemeralEnvironmentStatus { namespace, stack };
+    if env.status.as_ref() != Some(&status) {
         ctx.environments
             .patch_status(
                 &env.name_any(),
                 &PatchParams::default(),
                 &Patch::Merge(json!({
                     "metadata": { "resourceVersion": env.resource_version() },
-                    "status": { "namespace": name },
+                    "status": status,
                 })),
             )
             .await?;
     }
-
-    // Check for out-of-band namespace deletion without a cluster-wide watch.
-    Ok(Action::requeue(Duration::from_secs(30)))
+    Ok(())
 }
 
 async fn cleanup(env: &EphemeralEnvironment, ctx: &Context) -> Result<Action, ReconcileError> {
@@ -128,6 +174,9 @@ async fn cleanup(env: &EphemeralEnvironment, ctx: &Context) -> Result<Action, Re
         return Ok(Action::await_change());
     }
     if ns.metadata.deletion_timestamp.is_none() {
+        if env.spec.api_postgres.is_some() {
+            stack::uninstall(ctx.client.clone(), &name, CONTROL_NAMESPACE).await?;
+        }
         let params = DeleteParams {
             preconditions: Some(Preconditions {
                 uid: Some(

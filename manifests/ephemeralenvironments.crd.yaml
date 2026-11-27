@@ -20,8 +20,22 @@ spec:
           type: object
           properties:
             spec:
-              description: A request for a dedicated Kubernetes namespace.
+              description: A request for a dedicated Kubernetes namespace and optional demo stack.
               type: object
+              properties:
+                apiPostgres:
+                  description: Opt in to the bundled PostgREST and Postgres chart.
+                  nullable: true
+                  type: object
+                  properties:
+                    apiVersion:
+                      description: An approved PostgREST version. Changing it upgrades the same release.
+                      enum: [v16.5, v16.6]
+                      type: string
+                  required: [apiVersion]
+              x-kubernetes-validations:
+                - rule: "!has(oldSelf.apiPostgres) || has(self.apiPostgres)"
+                  message: delete the environment to remove its API and Postgres stack
             status:
               description: The namespace allocated to this environment.
               nullable: true
@@ -30,6 +44,28 @@ spec:
                 namespace:
                   description: Name of the workload namespace, not a workload readiness signal.
                   type: string
+                stack:
+                  description: Readiness of the requested stack, if one was requested.
+                  nullable: true
+                  type: object
+                  properties:
+                    observedGeneration:
+                      description: Spec generation that was checked. Older generations may be stale.
+                      format: int64
+                      type: integer
+                    ready:
+                      description: Whether the requested release and its workloads are ready.
+                      type: boolean
+                    reason:
+                      description: The result of the check.
+                      enum: [ReleaseReady, WorkloadsNotReady, ReconcileFailed, ReleasePending]
+                      type: string
+                    releaseRevision:
+                      description: Revision of the release, when known.
+                      format: int32
+                      nullable: true
+                      type: integer
+                  required: [observedGeneration, ready, reason]
               required: [namespace]
           required: [spec]
       subresources:

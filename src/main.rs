@@ -1,4 +1,6 @@
 mod controller;
+mod helm;
+mod stack;
 
 #[tokio::main]
 async fn main() -> Result<(), kube::Error> {

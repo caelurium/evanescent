@@ -1,0 +1,5 @@
+apiVersion: v2
+name: api-postgres
+description: Bundled PostgREST and PostgreSQL demo stack for Evanescent
+type: application
+version: 0.1.0

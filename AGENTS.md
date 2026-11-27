@@ -9,6 +9,9 @@ A Rust Kubernetes operator for ephemeral environments.
   `examples/ephemeral-environment.yaml` in sync.
 - `src/controller.rs` owns reconciliation and namespace cleanup.
   `src/main.rs` handles startup and client setup.
+- `src/helm.rs` runs the pinned Helm CLI. `src/stack.rs` owns the bundled
+  chart's settings, permissions, and readiness. Bump the version in
+  `charts/api-postgres/Chart.yaml` and `src/stack.rs` when changing its content.
 - `manifests/rbac.yaml` defines the controller's permissions.
   `manifests/deployment.yaml` runs the image built by `Dockerfile`.
   `scripts/kind-smoke.sh` exercises the lifecycle against a real Kubernetes API.
@@ -36,7 +39,10 @@ A Rust Kubernetes operator for ephemeral environments.
   permissions the controller needs. A dedicated namespace is not a security
   boundary for untrusted workloads.
 - Treat `.status.namespace` as the name of the allocated namespace, not a
-  signal that workloads are ready.
+  signal that workloads are ready. Use `.status.stack` for release readiness
+  and include the spec generation that was checked.
+- Uninstall the Helm release before deleting a healthy workload namespace.
+  Keep chart sources and images on the operator's allowlist.
 - Preserve useful Kubernetes error context without logging credentials or
   secret values.
 
