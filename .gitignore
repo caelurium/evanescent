@@ -1,4 +1,5 @@
 /target/
+/kind.kubeconfig
 .env
 .env.*
 !.env.example
