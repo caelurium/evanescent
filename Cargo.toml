@@ -1,0 +1,9 @@
+[package]
+name = "evanescent"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "A Kubernetes operator for ephemeral environments"
+repository = "https://github.com/caelurium/evanescent"
+readme = "README.md"
+publish = false
