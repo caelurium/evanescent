@@ -8,7 +8,8 @@ A Rust Kubernetes operator for ephemeral environments.
   types, `manifests/ephemeralenvironments.crd.yaml`, and
   `examples/ephemeral-environment.yaml` in sync.
 - `src/controller.rs` owns reconciliation and namespace cleanup.
-  `src/main.rs` handles startup and client setup.
+  `src/expiry.rs` calculates TTL deadlines. `src/main.rs` handles startup
+  and client setup.
 - `src/helm.rs` runs the pinned Helm CLI. `src/stack.rs` owns the bundled
   chart's settings, permissions, and readiness. Bump the version in
   `charts/api-postgres/Chart.yaml` and `src/stack.rs` when changing its content.
@@ -35,6 +36,9 @@ A Rust Kubernetes operator for ephemeral environments.
 - Add the finalizer before creating workload resources. Use the request UID to
   identify its namespace, verify ownership before deleting, and keep the
   finalizer until the owned namespace is gone.
+- Calculate expiry from the request's creation time. Delete the request with
+  UID and resource-version preconditions so expiry follows normal cleanup and
+  cannot act on a stale lifetime.
 - Keep request watches scoped to `evanescent-system` and grant only the RBAC
   permissions the controller needs. A dedicated namespace is not a security
   boundary for untrusted workloads.

@@ -33,6 +33,13 @@ spec:
                       enum: [v16.5, v16.6]
                       type: string
                   required: [apiVersion]
+                ttlSeconds:
+                  description: Lifetime in seconds from creation. Omit to disable automatic deletion.
+                  format: int32
+                  maximum: 31536000.0
+                  minimum: 1.0
+                  nullable: true
+                  type: integer
               x-kubernetes-validations:
                 - rule: "!has(oldSelf.apiPostgres) || has(self.apiPostgres)"
                   message: delete the environment to remove its API and Postgres stack
@@ -43,6 +50,11 @@ spec:
               properties:
                 namespace:
                   description: Name of the workload namespace, not a workload readiness signal.
+                  type: string
+                expiresAt:
+                  description: Scheduled time for automatic deletion, when a lifetime is set.
+                  format: date-time
+                  nullable: true
                   type: string
                 stack:
                   description: Readiness of the requested stack, if one was requested.
