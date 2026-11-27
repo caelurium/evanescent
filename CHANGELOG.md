@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/caelurium/evanescent/compare/v0.4.0...v0.5.0) (2026-11-27)
+
+
+### Features
+
+* publish versioned operator images to GHCR ([f0dfe09](https://github.com/caelurium/evanescent/commit/f0dfe0978412048a39b2052ae8078d91bd875873))
+
 ## [0.4.0](https://github.com/caelurium/evanescent/compare/v0.3.0...v0.4.0) (2026-11-27)
 
 
