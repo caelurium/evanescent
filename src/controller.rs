@@ -2,7 +2,9 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use evanescent::environment::{EphemeralEnvironment, EphemeralEnvironmentStatus, StackStatus};
 use futures::StreamExt;
-use k8s_openapi::api::core::v1::Namespace;
+use k8s_openapi::{
+    api::core::v1::Namespace, apimachinery::pkg::apis::meta::v1::Time, jiff::Timestamp,
+};
 use kube::{
     Api, Client, ResourceExt,
     api::{DeleteParams, ObjectMeta, Patch, PatchParams, PostParams, Preconditions},
@@ -16,7 +18,7 @@ use kube::{
 use serde_json::json;
 use thiserror::Error;
 
-use crate::stack;
+use crate::{expiry, stack};
 
 const CONTROL_NAMESPACE: &str = "evanescent-system";
 const FINALIZER: &str = "evanescent.caelurium.github.io/namespace-cleanup";
@@ -34,12 +36,16 @@ enum ReconcileError {
     Kubernetes(#[from] kube::Error),
     #[error("{0} has no UID")]
     MissingUid(String),
+    #[error("{0} has no resource version")]
+    MissingResourceVersion(String),
     #[error("namespace {0} is not owned by this ephemeral environment")]
     OwnershipConflict(String),
     #[error("waiting for namespace deletion")]
     NamespaceDeleting,
     #[error(transparent)]
     Stack(#[from] stack::Error),
+    #[error(transparent)]
+    Expiry(#[from] expiry::Error),
 }
 
 pub async fn run(client: Client) {
@@ -83,13 +89,22 @@ async fn reconcile(
 
 async fn apply(env: &EphemeralEnvironment, ctx: &Context) -> Result<Action, ReconcileError> {
     let uid = environment_uid(env)?;
+    let expires_at = expiry::deadline(env)?;
+    if expiry::is_due(expires_at.as_ref(), Timestamp::now()) {
+        return expire(env, ctx, uid).await;
+    }
+
     let name = namespace_name(uid);
     match ctx.namespaces.get_opt(&name).await? {
         Some(ns) if !owns_namespace(&ns, uid) => {
             return Err(ReconcileError::OwnershipConflict(name));
         }
         Some(ns) if ns.metadata.deletion_timestamp.is_some() => {
-            return Ok(Action::requeue(Duration::from_secs(2)));
+            return Ok(Action::requeue(expiry::next_check(
+                expires_at.as_ref(),
+                Timestamp::now(),
+                Duration::from_secs(2),
+            )));
         }
         Some(_) => {}
         None => {
@@ -106,12 +121,20 @@ async fn apply(env: &EphemeralEnvironment, ctx: &Context) -> Result<Action, Reco
         }
     }
 
-    if env.status.as_ref().map(|status| status.namespace.as_str()) != Some(name.as_str()) {
-        update_status(env, ctx, name, None).await?;
+    let current = env
+        .status
+        .as_ref()
+        .filter(|status| status.namespace == name);
+    if current.is_none_or(|status| status.expires_at != expires_at) {
+        let stack = current.and_then(|status| status.stack.clone());
+        update_status(env, ctx, name, expires_at.as_ref(), stack).await?;
         return Ok(Action::requeue(Duration::ZERO));
     }
 
     if let Some(spec) = &env.spec.api_postgres {
+        if expiry::is_due(expires_at.as_ref(), Timestamp::now()) {
+            return expire(env, ctx, uid).await;
+        }
         let generation = env.metadata.generation.unwrap_or_default();
         match stack::reconcile(
             ctx.client.clone(),
@@ -122,7 +145,7 @@ async fn apply(env: &EphemeralEnvironment, ctx: &Context) -> Result<Action, Reco
         )
         .await
         {
-            Ok(status) => update_status(env, ctx, name, Some(status)).await?,
+            Ok(status) => update_status(env, ctx, name, expires_at.as_ref(), Some(status)).await?,
             Err(error) => {
                 let status = StackStatus {
                     observed_generation: generation,
@@ -130,23 +153,57 @@ async fn apply(env: &EphemeralEnvironment, ctx: &Context) -> Result<Action, Reco
                     reason: error.reason(),
                     release_revision: None,
                 };
-                update_status(env, ctx, name, Some(status)).await?;
+                update_status(env, ctx, name, expires_at.as_ref(), Some(status)).await?;
                 return Err(error.into());
             }
         }
     }
 
     // Check for out-of-band namespace deletion without a cluster-wide watch.
-    Ok(Action::requeue(Duration::from_secs(30)))
+    Ok(Action::requeue(expiry::next_check(
+        expires_at.as_ref(),
+        Timestamp::now(),
+        Duration::from_secs(30),
+    )))
+}
+
+async fn expire(
+    env: &EphemeralEnvironment,
+    ctx: &Context,
+    uid: &str,
+) -> Result<Action, ReconcileError> {
+    let name = env.name_any();
+    let resource_version = env
+        .resource_version()
+        .ok_or_else(|| ReconcileError::MissingResourceVersion(name.clone()))?;
+    let params = DeleteParams {
+        // A stale reconcile must not delete a replacement or ignore a TTL edit.
+        preconditions: Some(Preconditions {
+            uid: Some(uid.to_owned()),
+            resource_version: Some(resource_version),
+        }),
+        ..DeleteParams::default()
+    };
+    match ctx.environments.delete(&name, &params).await {
+        Ok(_) => tracing::info!(environment = name, "requested expiry cleanup"),
+        Err(kube::Error::Api(response)) if response.code == 404 => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(Action::await_change())
 }
 
 async fn update_status(
     env: &EphemeralEnvironment,
     ctx: &Context,
     namespace: String,
+    expires_at: Option<&Time>,
     stack: Option<StackStatus>,
 ) -> Result<(), kube::Error> {
-    let status = EphemeralEnvironmentStatus { namespace, stack };
+    let status = EphemeralEnvironmentStatus {
+        namespace,
+        expires_at: expires_at.cloned(),
+        stack,
+    };
     if env.status.as_ref() != Some(&status) {
         ctx.environments
             .patch_status(

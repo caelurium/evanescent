@@ -1,0 +1,7 @@
+apiVersion: evanescent.caelurium.github.io/v1alpha1
+kind: EphemeralEnvironment
+metadata:
+  name: short-lived
+  namespace: evanescent-system
+spec:
+  ttlSeconds: 15

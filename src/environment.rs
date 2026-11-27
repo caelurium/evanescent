@@ -1,5 +1,6 @@
 //! The `EphemeralEnvironment` API.
 
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,10 @@ pub struct EphemeralEnvironmentSpec {
     /// Opt in to the bundled PostgREST and Postgres chart.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_postgres: Option<ApiPostgresSpec>,
+    /// Lifetime in seconds from creation. Omit to disable automatic deletion.
+    #[schemars(range(min = 1, max = 31_536_000))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_seconds: Option<i32>,
 }
 
 /// The settings users can change on the bundled chart.
@@ -46,9 +51,12 @@ pub enum PostgrestVersion {
 
 /// The namespace allocated to this environment.
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EphemeralEnvironmentStatus {
     /// Name of the workload namespace, not a workload readiness signal.
     pub namespace: String,
+    /// Scheduled time for automatic deletion, when a lifetime is set.
+    pub expires_at: Option<Time>,
     /// Readiness of the requested stack, if one was requested.
     pub stack: Option<StackStatus>,
 }

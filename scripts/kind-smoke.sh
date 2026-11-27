@@ -119,12 +119,13 @@ generation="$(env_kubectl get "$environment" -o jsonpath='{.metadata.generation}
 curl --fail-with-body --silent --show-error --max-time 15 "$notes?id=eq.42" |
   grep -F 'survived upgrade'
 
-# Hold the chart Deployment, then the namespace, to check cleanup ordering.
+# Shorten the lifetime of the Helm environment and check that it cleans up in order.
+# Hold the chart Deployment first, then the namespace.
 kubectl -n "$namespace" patch deployment api --type=merge \
   -p '{"metadata":{"finalizers":["evanescent.caelurium.github.io/smoke-hold"]}}'
 kubectl patch namespace "$namespace" --type=merge \
   -p '{"metadata":{"finalizers":["evanescent.caelurium.github.io/smoke-hold"]}}'
-env_kubectl delete "$environment" --wait=false
+env_kubectl patch "$environment" --type=merge -p '{"spec":{"ttlSeconds":1}}'
 kubectl -n "$namespace" wait --for='jsonpath={.metadata.deletionTimestamp}' --timeout=60s deployment/api
 [[ "$(kubectl get namespace "$namespace" -o jsonpath='{.status.phase}')" == Active ]]
 kubectl -n "$namespace" patch deployment api --type=merge -p '{"metadata":{"finalizers":null}}'
@@ -146,3 +147,15 @@ namespace="$(env_kubectl get ephemeralenvironment/demo -o jsonpath='{.status.nam
 binding="$(kubectl -n "$namespace" get rolebinding evanescent-helm --ignore-not-found -o name)"
 [[ -z "$binding" ]]
 env_kubectl delete ephemeralenvironment/demo --timeout=90s
+
+# An idle request with a future deadline should expire without another spec change.
+kubectl apply -f examples/expiring-environment.yaml
+environment=ephemeralenvironment/short-lived
+request_uid="$(env_kubectl get "$environment" -o jsonpath='{.metadata.uid}')"
+namespace="evanescent-$request_uid"
+env_kubectl wait --for="jsonpath={.status.namespace}=$namespace" --timeout=60s "$environment"
+env_kubectl wait --for='jsonpath={.status.expiresAt}' --timeout=60s "$environment"
+kubectl get namespace "$namespace" -o name
+env_kubectl wait --for=delete --timeout=90s "$environment"
+remaining="$(kubectl get namespace "$namespace" --ignore-not-found -o name)"
+[[ -z "$remaining" ]]

@@ -6,8 +6,8 @@ Evanescent watches `EphemeralEnvironment` requests in `evanescent-system`. It
 creates one Kubernetes namespace per request, records its name in
 `.status.namespace`, and waits for that namespace to disappear when the request
 is deleted. Requests can opt into a bundled PostgREST and Postgres demo stack
-that the operator installs and upgrades with Helm v4.3.2. Environments do not
-expire automatically.
+that the operator installs and upgrades with Helm v4.3.2, and set a lifetime
+for automatic cleanup.
 
 ## Development
 
@@ -28,7 +28,7 @@ bash scripts/kind-smoke.sh
 
 This builds the operator image, runs it as the controller service account in a
 fresh cluster, and checks Helm install, restart without replacing the release,
-an API upgrade that preserves a database row, and cleanup of the release,
+an API upgrade that preserves a database row, and automatic cleanup of the release,
 namespace, and persistent volume. It removes the test cluster on exit. GitHub
 Actions runs the same test on pull requests.
 
@@ -73,6 +73,26 @@ If an interrupted Helm command leaves a pending release, the controller
 reports `ReleasePending` rather than forcing an upgrade or deleting the
 database. An administrator can inspect the release, recover it, or delete
 the environment to tear it down.
+
+### Set an environment lifetime
+
+Set `spec.ttlSeconds` to expire a namespace-only or Helm environment. The
+lifetime is measured from the request's `.metadata.creationTimestamp`, not
+from readiness or the last update. Omit it for manual cleanup only. An
+existing lifetime can be shortened, extended, or removed before deletion
+starts. The accepted range is one second to 365 days.
+
+```sh
+kubectl apply -f examples/expiring-environment.yaml
+kubectl -n evanescent-system get ephemeralenvironment short-lived -o yaml
+```
+
+The example lives for 15 seconds. `.status.expiresAt` shows the scheduled
+deadline. At that point the operator deletes the request, which triggers the
+same cleanup as a manual delete. Controller downtime or an in-flight Helm
+operation can delay cleanup but does not reset the deadline.
+
+### Tear down the test cluster
 
 Keep the controller running until the request is deleted, then run
 `kind delete cluster --name evanescent --kubeconfig ./kind.kubeconfig`.
