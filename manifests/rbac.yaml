@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: evanescent-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: evanescent
+  namespace: evanescent-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: evanescent
+  namespace: evanescent-system
+rules:
+  - apiGroups: [evanescent.caelurium.github.io]
+    resources: [ephemeralenvironments]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [evanescent.caelurium.github.io]
+    resources: [ephemeralenvironments/status]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: evanescent
+  namespace: evanescent-system
+subjects:
+  - kind: ServiceAccount
+    name: evanescent
+    namespace: evanescent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: evanescent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: evanescent-namespaces
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: evanescent-namespaces
+subjects:
+  - kind: ServiceAccount
+    name: evanescent
+    namespace: evanescent-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: evanescent-namespaces
