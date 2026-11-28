@@ -85,10 +85,10 @@ impl Catalog {
             for (key, image) in &values.images {
                 let (repository, digest) = image.split_once('@').ok_or(Error::UnapprovedValue)?;
                 if !valid_digest(digest)
-                    || !template
+                    || template
                         .image_repositories
                         .get(key)
-                        .is_some_and(|approved| approved == repository)
+                        .is_none_or(|approved| approved != repository)
                 {
                     return Err(Error::UnapprovedValue);
                 }

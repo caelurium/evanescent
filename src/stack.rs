@@ -79,7 +79,12 @@ pub async fn reconcile_chart(
     generation: i64,
 ) -> Result<StackStatus, Error> {
     ensure_access(client, namespace, control_namespace).await?;
-    let mut args = vec!["--reset-values", "--wait-for-jobs"];
+    let mut args = vec![
+        "--reset-values",
+        "--wait-for-jobs",
+        "--labels",
+        "evanescent.caelurium.github.io/source=oci",
+    ];
     if release.plain_http {
         args.push("--plain-http");
     }
