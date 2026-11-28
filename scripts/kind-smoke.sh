@@ -255,6 +255,12 @@ if denial="$(kubectl -n "$namespace" patch ingress web --dry-run=server --type=j
   exit 1
 fi
 grep -F 'Ingress rules must use explicit hostnames' <<<"$denial"
+if denial="$(kubectl -n "$namespace" annotate ingress web --dry-run=server \
+  nginx.ingress.kubernetes.io/server-alias=other.preview.example.com 2>&1)"; then
+  printf 'Accepted an unapproved routing annotation\n' >&2
+  exit 1
+fi
+grep -F 'Ingress annotations must be approved' <<<"$denial"
 
 kubectl -n "$namespace" wait --for='jsonpath={.status.hard.pods}=20' --timeout=30s resourcequota/evanescent
 if denial="$(kubectl -n "$namespace" apply --dry-run=server -f - 2>&1 <<'EOF'

@@ -201,7 +201,9 @@ namespace as a subdomain, for example
 `{{ .Release.Namespace }}.preview.example.com` or
 `api.{{ .Release.Namespace }}.preview.example.com`. Charts can choose paths,
 backend Services, and TLS configuration for those hosts. The policy rejects
-wildcards, hostless rules, and routes for other environments. Helm updates
+wildcards, hostless rules, and routes for other environments. Administrators
+can add trusted controller-specific annotation keys to the policy's
+`allowedAnnotations` list after reviewing how they affect routing. Helm updates
 and deletes the Ingress with the release. DNS and HTTP availability are
 independent of the Helm release readiness check.
 

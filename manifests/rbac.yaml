@@ -133,11 +133,17 @@ spec:
       expression: "'preview.example.com'"
     - name: baseHost
       expression: "request.namespace + '.' + variables.domain"
+    - name: allowedAnnotations
+      expression: "['meta.helm.sh/release-name', 'meta.helm.sh/release-namespace']"
   validations:
     - expression: >-
         has(object.spec.ingressClassName) && object.spec.ingressClassName == variables.ingressClass &&
         (!has(object.metadata.annotations) || !('kubernetes.io/ingress.class' in object.metadata.annotations))
       message: Use the approved preview IngressClass through spec.ingressClassName.
+    - expression: >-
+        !has(object.metadata.annotations) ||
+        object.metadata.annotations.all(key, key in variables.allowedAnnotations)
+      message: Ingress annotations must be approved by the platform.
     - expression: >-
         !has(object.spec.defaultBackend) && has(object.spec.rules) && size(object.spec.rules) > 0 &&
         object.spec.rules.all(rule,
