@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.7.0](https://github.com/caelurium/evanescent/compare/v0.6.0...v0.7.0) (2026-11-28)
+
+
+### Features
+
+* enforce preview ingress policy and namespace quotas ([06502a3](https://github.com/caelurium/evanescent/commit/06502a328613dee2ae12a677a4053aeb18470d9a))
+
+## [0.6.0](https://github.com/caelurium/evanescent/compare/v0.5.0...v0.6.0) (2026-11-28)
+
+
+### Features
+
+* deploy approved OCI Helm charts ([f4b8a34](https://github.com/caelurium/evanescent/commit/f4b8a34d537e0acdb2a1e8e583a71aa48a274da6))
+* deploy approved OCI Helm charts ([e810734](https://github.com/caelurium/evanescent/commit/e810734cf19230cf2b0a6cf0f6f98c5b85c61ccf))
+
+
+### Bug Fixes
+
+* record the source of catalog releases ([e70ba8c](https://github.com/caelurium/evanescent/commit/e70ba8c5ed64df2fa5e86ba87249481245ecaaaf))
+
 ## [0.5.0](https://github.com/caelurium/evanescent/compare/v0.4.0...v0.5.0) (2026-11-27)
 
 
