@@ -9,7 +9,9 @@ use kube::{
 };
 use thiserror::Error;
 
-use crate::helm;
+use crate::{catalog, helm};
+
+const BUNDLED_CHART: &str = "/opt/evanescent/charts/api-postgres";
 
 const CHART_VERSION: &str = "0.1.0";
 const ROLE: &str = "evanescent-helm";
@@ -23,6 +25,8 @@ pub enum Error {
     #[error("the Helm role binding has an unexpected role or subject")]
     RoleBindingConflict,
     #[error(transparent)]
+    Catalog(#[from] catalog::Error),
+    #[error(transparent)]
     Helm(#[from] helm::Error),
 }
 
@@ -30,6 +34,7 @@ impl Error {
     pub fn reason(&self) -> StackReason {
         match self {
             Self::Helm(helm::Error::Pending) => StackReason::ReleasePending,
+            Self::Catalog(_) => StackReason::TemplateRejected,
             _ => StackReason::ReconcileFailed,
         }
     }
@@ -45,7 +50,14 @@ pub async fn reconcile(
     ensure_access(client.clone(), namespace, control_namespace).await?;
     let image = api_image(version);
     let desired = format!("evanescent/api-postgres/{CHART_VERSION}/{image}");
-    let revision = helm::deploy(namespace, image, &desired).await?;
+    let values = format!("api.image={image}");
+    let revision = helm::deploy(
+        namespace,
+        BUNDLED_CHART,
+        &desired,
+        &["--set-string", &values],
+    )
+    .await?;
     let ready = workloads_ready(client, namespace).await?;
     Ok(StackStatus {
         observed_generation: generation,
@@ -55,6 +67,35 @@ pub async fn reconcile(
         } else {
             StackReason::WorkloadsNotReady
         },
+        release_revision: Some(revision),
+    })
+}
+
+pub async fn reconcile_chart(
+    client: Client,
+    namespace: &str,
+    control_namespace: &str,
+    release: catalog::Release<'_>,
+    generation: i64,
+) -> Result<StackStatus, Error> {
+    ensure_access(client, namespace, control_namespace).await?;
+    let mut args = vec![
+        "--reset-values",
+        "--wait-for-jobs",
+        "--labels",
+        "evanescent.caelurium.github.io/source=oci",
+    ];
+    if release.plain_http {
+        args.push("--plain-http");
+    }
+    for value in &release.overrides {
+        args.extend(["--set-json", value.as_str()]);
+    }
+    let revision = helm::deploy(namespace, release.chart, &release.description, &args).await?;
+    Ok(StackStatus {
+        observed_generation: generation,
+        ready: true,
+        reason: StackReason::ReleaseReady,
         release_revision: Some(revision),
     })
 }

@@ -20,7 +20,7 @@ spec:
           type: object
           properties:
             spec:
-              description: A request for a dedicated Kubernetes namespace and optional demo stack.
+              description: A request for a dedicated Kubernetes namespace and optional Helm release.
               type: object
               properties:
                 apiPostgres:
@@ -33,6 +33,13 @@ spec:
                       enum: [v16.5, v16.6]
                       type: string
                   required: [apiVersion]
+                templateRef:
+                  description: Approved catalog entry. Once set, this reference stays with the environment.
+                  maxLength: 63
+                  minLength: 1
+                  nullable: true
+                  pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+                  type: string
                 ttlSeconds:
                   description: Lifetime in seconds from creation. Omit to disable automatic deletion.
                   format: int32
@@ -40,9 +47,33 @@ spec:
                   minimum: 1.0
                   nullable: true
                   type: integer
+                values:
+                  description: Overrides explicitly permitted by the catalog entry.
+                  nullable: true
+                  type: object
+                  properties:
+                    images:
+                      description: Image references pinned to SHA-256 digests.
+                      type: object
+                      default: {}
+                      additionalProperties:
+                        type: string
+                    replicas:
+                      description: Replica counts bounded by the administrator's template rules.
+                      type: object
+                      default: {}
+                      additionalProperties:
+                        format: int32
+                        type: integer
               x-kubernetes-validations:
                 - rule: "!has(oldSelf.apiPostgres) || has(self.apiPostgres)"
                   message: delete the environment to remove its API and Postgres stack
+                - rule: "!has(oldSelf.templateRef) || (has(self.templateRef) && self.templateRef == oldSelf.templateRef)"
+                  message: templateRef is immutable once set
+                - rule: "!has(self.apiPostgres) || !has(self.templateRef)"
+                  message: choose either templateRef or apiPostgres
+                - rule: "!has(self.values) || has(self.templateRef)"
+                  message: values requires templateRef
             status:
               description: The namespace allocated to this environment.
               nullable: true
@@ -70,7 +101,7 @@ spec:
                       type: boolean
                     reason:
                       description: The result of the check.
-                      enum: [ReleaseReady, WorkloadsNotReady, ReconcileFailed, ReleasePending]
+                      enum: [ReleaseReady, WorkloadsNotReady, ReconcileFailed, TemplateRejected, ReleasePending]
                       type: string
                     releaseRevision:
                       description: Revision of the release, when known.

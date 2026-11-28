@@ -118,11 +118,14 @@ metadata:
   name: evanescent-helm
 rules:
   - apiGroups: [""]
-    resources: [configmaps, secrets, services]
+    resources: [configmaps, persistentvolumeclaims, pods, secrets, services]
     verbs: [get, list, create, update, patch, delete]
   - apiGroups: [apps]
-    resources: [deployments, statefulsets]
+    resources: [daemonsets, deployments, statefulsets]
     verbs: [get, list, create, update, patch, delete]
   - apiGroups: [apps]
     resources: [replicasets]
     verbs: [get, list]
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [get, list, create, update, patch, delete]

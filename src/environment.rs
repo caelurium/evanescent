@@ -1,11 +1,13 @@
 //! The `EphemeralEnvironment` API.
 
+use std::collections::BTreeMap;
+
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// A request for a dedicated Kubernetes namespace and optional demo stack.
+/// A request for a dedicated Kubernetes namespace and optional Helm release.
 #[derive(CustomResource, Clone, Debug, Deserialize, JsonSchema, Serialize)]
 #[kube(
     group = "evanescent.caelurium.github.io",
@@ -19,15 +21,45 @@ use serde::{Deserialize, Serialize};
 #[schemars(extend("x-kubernetes-validations" = [{
     "rule": "!has(oldSelf.apiPostgres) || has(self.apiPostgres)",
     "message": "delete the environment to remove its API and Postgres stack"
+}, {
+    "rule": "!has(oldSelf.templateRef) || (has(self.templateRef) && self.templateRef == oldSelf.templateRef)",
+    "message": "templateRef is immutable once set"
+}, {
+    "rule": "!has(self.apiPostgres) || !has(self.templateRef)",
+    "message": "choose either templateRef or apiPostgres"
+}, {
+    "rule": "!has(self.values) || has(self.templateRef)",
+    "message": "values requires templateRef"
 }]))]
 pub struct EphemeralEnvironmentSpec {
     /// Opt in to the bundled PostgREST and Postgres chart.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_postgres: Option<ApiPostgresSpec>,
+    /// Approved catalog entry. Once set, this reference stays with the environment.
+    #[schemars(
+        length(min = 1, max = 63),
+        regex(pattern = "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_ref: Option<String>,
+    /// Overrides explicitly permitted by the catalog entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<ChartValues>,
     /// Lifetime in seconds from creation. Omit to disable automatic deletion.
     #[schemars(range(min = 1, max = 31_536_000))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ttl_seconds: Option<i32>,
+}
+
+/// Digest image and replica count overrides, keyed by Helm values paths.
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
+pub struct ChartValues {
+    /// Image references pinned to SHA-256 digests.
+    #[serde(default)]
+    pub images: BTreeMap<String, String>,
+    /// Replica counts bounded by the administrator's template rules.
+    #[serde(default)]
+    pub replicas: BTreeMap<String, i32>,
 }
 
 /// The settings users can change on the bundled chart.
@@ -84,6 +116,8 @@ pub enum StackReason {
     WorkloadsNotReady,
     /// The Kubernetes API or Helm returned an error.
     ReconcileFailed,
+    /// The template or its requested values are absent from the catalog.
+    TemplateRejected,
     /// Helm recorded an incomplete operation.
     ReleasePending,
 }
