@@ -88,10 +88,14 @@ kubectl -n evanescent-system get ephemeralenvironments \
   -o 'custom-columns=NAME:.metadata.name,POSTGREST:.spec.apiPostgres.apiVersion,NAMESPACE:.status.namespace'
 ```
 
-Export any data you need from those environments. To migrate a stack, publish
-and approve your own chart, create a new request with `templateRef`, restore
-the data there, and verify the new environment. Delete the old request and
-wait for its namespace to disappear. Then apply the new release manifests.
+Export any data you need from those environments. To run the old and new
+stacks during migration, first install a transitional release that supports
+both `apiPostgres` and `templateRef`. Publish and approve your own chart,
+create a new request with `templateRef`, restore the data, and verify the new
+environment. Delete the old request and wait for its namespace to disappear
+before applying the retirement release. For a direct upgrade, export the data
+and delete the old request before upgrading, then restore into a catalog
+environment after the upgrade.
 
 If you upgrade first, an old Helm release can remain in the workload namespace
 until you delete or expire its request. Evanescent reports
@@ -139,7 +143,7 @@ release.
 To enable publishing, configure the `RELEASE_PLEASE_TOKEN` Actions secret
 with access to create release PRs and publish releases in this repository.
 
-### Use an approved OCI chart
+## Use an approved OCI chart
 
 A cluster administrator publishes the chart and creates a ConfigMap named
 `evanescent-chart-catalog` in `evanescent-system`. Put a JSON object in the
