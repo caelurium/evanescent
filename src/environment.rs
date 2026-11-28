@@ -19,22 +19,13 @@ use serde::{Deserialize, Serialize};
 )]
 #[serde(rename_all = "camelCase")]
 #[schemars(extend("x-kubernetes-validations" = [{
-    "rule": "!has(oldSelf.apiPostgres) || has(self.apiPostgres)",
-    "message": "delete the environment to remove its API and Postgres stack"
-}, {
     "rule": "!has(oldSelf.templateRef) || (has(self.templateRef) && self.templateRef == oldSelf.templateRef)",
     "message": "templateRef is immutable once set"
-}, {
-    "rule": "!has(self.apiPostgres) || !has(self.templateRef)",
-    "message": "choose either templateRef or apiPostgres"
 }, {
     "rule": "!has(self.values) || has(self.templateRef)",
     "message": "values requires templateRef"
 }]))]
 pub struct EphemeralEnvironmentSpec {
-    /// Opt in to the bundled PostgREST and Postgres chart.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_postgres: Option<ApiPostgresSpec>,
     /// Approved catalog entry. Once set, this reference stays with the environment.
     #[schemars(
         length(min = 1, max = 63),
@@ -60,25 +51,6 @@ pub struct ChartValues {
     /// Replica counts bounded by the administrator's template rules.
     #[serde(default)]
     pub replicas: BTreeMap<String, i32>,
-}
-
-/// The settings users can change on the bundled chart.
-#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiPostgresSpec {
-    /// An approved PostgREST version. Changing it upgrades the same release.
-    pub api_version: PostgrestVersion,
-}
-
-/// Supported PostgREST versions for the demo stack.
-#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, Serialize)]
-pub enum PostgrestVersion {
-    /// PostgREST 16.5.
-    #[serde(rename = "v16.5")]
-    V16_5,
-    /// PostgREST 16.6.
-    #[serde(rename = "v16.6")]
-    V16_6,
 }
 
 /// The namespace allocated to this environment.
@@ -118,6 +90,8 @@ pub enum StackReason {
     ReconcileFailed,
     /// The template or its requested values are absent from the catalog.
     TemplateRejected,
+    /// A release from outside the chart catalog is awaiting cleanup.
+    UnmanagedRelease,
     /// Helm recorded an incomplete operation.
     ReleasePending,
 }

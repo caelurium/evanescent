@@ -10,9 +10,9 @@ A Rust Kubernetes operator for ephemeral environments.
 - `src/controller.rs` owns reconciliation and namespace cleanup.
   `src/expiry.rs` calculates TTL deadlines. `src/main.rs` handles startup
   and client setup.
-- `src/helm.rs` runs the pinned Helm CLI. `src/stack.rs` owns the bundled
-  chart's settings, permissions, and readiness. Bump the version in
-  `charts/api-postgres/Chart.yaml` and `src/stack.rs` when changing its content.
+- `src/catalog.rs` validates OCI chart approval and request overrides.
+  `src/helm.rs` runs the pinned Helm CLI. `src/stack.rs` owns release access
+  and status. `src/budget.rs` provisions workload namespace quotas.
 - `manifests/rbac.yaml` defines the controller's permissions.
   `manifests/deployment.yaml` runs the image built by `Dockerfile`.
   `scripts/kind-smoke.sh` exercises the lifecycle against a real Kubernetes API.

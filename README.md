@@ -5,9 +5,9 @@ A Kubernetes operator for ephemeral environments.
 Evanescent watches `EphemeralEnvironment` requests in `evanescent-system`. It
 creates one Kubernetes namespace per request, records its name in
 `.status.namespace`, and waits for that namespace to disappear when the request
-is deleted. Requests can opt into a bundled PostgREST and Postgres demo stack
-that the operator installs and upgrades with Helm v4.3.2, and set a lifetime
-for automatic cleanup.
+is deleted. Requests can select an approved OCI Helm chart and set a lifetime
+for automatic cleanup. Evanescent installs, upgrades, and uninstalls each
+release with its bundled Helm v4.3.2 CLI.
 
 ## Install a release on a cluster
 
@@ -49,10 +49,10 @@ bash scripts/kind-smoke.sh
 ```
 
 This builds the operator image, runs it as the controller service account in a
-fresh cluster, and checks Helm install, restart without replacing the release,
-an API upgrade that preserves a database row, and automatic cleanup of the release,
-namespace, and persistent volume. It removes the test cluster on exit. GitHub
-Actions runs the same test on pull requests.
+fresh cluster, and checks OCI chart installation, restart without replacing
+the release, an in-place image upgrade, Ingress routing, quota enforcement,
+and automatic release and namespace cleanup. It removes the test cluster on
+exit. GitHub Actions runs the same test on pull requests.
 
 To try it interactively, build and load the image, then deploy the controller
 into a disposable cluster:
@@ -77,24 +77,32 @@ kubectl -n evanescent-system get ephemeralenvironment demo -o yaml
 kubectl -n evanescent-system delete ephemeralenvironment demo
 ```
 
-To deploy the demo stack instead, apply `examples/api-postgres-environment.yaml`.
-The cluster needs a default StorageClass with dynamic provisioning. Use
-`.status.stack.ready` and check that `.status.stack.observedGeneration` matches
-`.metadata.generation` before treating the stack as ready. Changing
-`spec.apiPostgres.apiVersion` from `v16.5` to `v16.6` upgrades the same release
-without replacing the database. Delete the request to remove the stack.
+### Upgrade from the bundled Postgres demo
 
-The demo is for trusted, disposable clusters. It exposes an unauthenticated
-API via an internal Service and initializes a synthetic `notes` table. It does
-not accept arbitrary images, external charts, or user-supplied credentials.
-Postgres credentials are generated per environment. Helm stores release data
-in namespace-local Secrets. The controller can bind its Helm role only in
-its workload namespaces, enforced by a validating admission policy.
+The bundled PostgREST and Postgres chart and `spec.apiPostgres` are retired.
+Before applying the new CRD or Deployment, find any demo environments with
+the old CRD still installed.
 
-If an interrupted Helm command leaves a pending release, the controller
-reports `ReleasePending` rather than forcing an upgrade or deleting the
-database. An administrator can inspect the release, recover it, or delete
-the environment to tear it down.
+```sh
+kubectl -n evanescent-system get ephemeralenvironments \
+  -o 'custom-columns=NAME:.metadata.name,POSTGREST:.spec.apiPostgres.apiVersion,NAMESPACE:.status.namespace'
+```
+
+Export any data you need from those environments. To run the old and new
+stacks during migration, first install a transitional release that supports
+both `apiPostgres` and `templateRef`. Publish and approve your own chart,
+create a new request with `templateRef`, restore the data, and verify the new
+environment. Delete the old request and wait for its namespace to disappear
+before applying the retirement release. For a direct upgrade, export the data
+and delete the old request before upgrading, then restore into a catalog
+environment after the upgrade.
+
+If you upgrade first, an old Helm release can remain in the workload namespace
+until you delete or expire its request. Evanescent reports
+`UnmanagedRelease` and retains the ability to uninstall it. Create a new
+request to migrate to a catalog chart. Existing releases with a pending Helm
+operation report `ReleasePending` when reconciling a chart. An administrator
+can recover the release or delete its environment to tear it down.
 
 ### Set an environment lifetime
 
@@ -135,7 +143,7 @@ release.
 To enable publishing, configure the `RELEASE_PLEASE_TOKEN` Actions secret
 with access to create release PRs and publish releases in this repository.
 
-### Use an approved OCI chart
+## Use an approved OCI chart
 
 A cluster administrator publishes the chart and creates a ConfigMap named
 `evanescent-chart-catalog` in `evanescent-system`. Put a JSON object in the

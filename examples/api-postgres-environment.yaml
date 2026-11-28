@@ -1,8 +1,0 @@
-apiVersion: evanescent.caelurium.github.io/v1alpha1
-kind: EphemeralEnvironment
-metadata:
-  name: demo-stack
-  namespace: evanescent-system
-spec:
-  apiPostgres:
-    apiVersion: v16.5

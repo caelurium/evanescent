@@ -5,6 +5,8 @@ use thiserror::Error;
 use tokio::{process::Command, time::timeout};
 
 const RELEASE: &str = "evanescent";
+const SOURCE_LABEL: &str = "evanescent.caelurium.github.io/source=oci";
+const RELEASE_FILTER: &str = "^evanescent$";
 const HELM_TIMEOUT: &str = "120s";
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(20);
 // A failed upgrade can use the wait timeout again for its rollback.
@@ -28,6 +30,8 @@ pub enum Error {
     InvalidStatus,
     #[error("the Helm release has an incomplete operation")]
     Pending,
+    #[error("an existing Helm release is outside the chart catalog")]
+    UnmanagedRelease,
 }
 
 #[derive(Deserialize)]
@@ -64,14 +68,21 @@ pub async fn deploy(
     desired: &str,
     extra_args: &[&str],
 ) -> Result<i32, Error> {
-    match release_action(latest_release(namespace).await?, desired) {
+    let existing = latest_release(namespace).await?;
+    let has_release = existing.is_some();
+    match release_action(existing, desired) {
         ReleaseAction::Keep(revision) => return Ok(revision),
         // Don't delete data or guess whether an interrupted operation is safe to repeat.
         ReleaseAction::Wait => return Err(Error::Pending),
         ReleaseAction::Upgrade => {}
     }
 
+    if has_release && !is_catalog_release(namespace).await? {
+        return Err(Error::UnmanagedRelease);
+    }
+
     let mut args = vec![
+        RELEASE,
         "--install",
         chart,
         "--description",
@@ -83,6 +94,10 @@ pub async fn deploy(
         HELM_TIMEOUT,
         "--rollback-on-failure",
         "--history-max=5",
+        "--reset-values",
+        "--wait-for-jobs",
+        "--labels",
+        SOURCE_LABEL,
     ];
     args.extend_from_slice(extra_args);
     let output = run("upgrade", namespace, &args, RELEASE_TIMEOUT).await?;
@@ -98,6 +113,7 @@ pub async fn uninstall(namespace: &str) -> Result<(), Error> {
         "uninstall",
         namespace,
         &[
+            RELEASE,
             "--ignore-not-found",
             "--cascade=foreground",
             "--wait=legacy",
@@ -115,7 +131,7 @@ async fn latest_release(namespace: &str) -> Result<Option<Release>, Error> {
     let output = run(
         "history",
         namespace,
-        &["--output=json", "--max=1"],
+        &[RELEASE, "--output=json", "--max=1"],
         INSPECT_TIMEOUT,
     )
     .await?;
@@ -127,6 +143,25 @@ async fn latest_release(namespace: &str) -> Result<Option<Release>, Error> {
         return Ok(None);
     }
     decode_latest(&succeeded("history", output)?)
+}
+
+async fn is_catalog_release(namespace: &str) -> Result<bool, Error> {
+    let output = run(
+        "list",
+        namespace,
+        &[
+            "--filter",
+            RELEASE_FILTER,
+            "--selector",
+            SOURCE_LABEL,
+            "--output=json",
+        ],
+        INSPECT_TIMEOUT,
+    )
+    .await?;
+    let releases: Vec<serde::de::IgnoredAny> =
+        serde_json::from_slice(&succeeded("list", output)?).map_err(|_| Error::InvalidStatus)?;
+    Ok(!releases.is_empty())
 }
 
 fn succeeded(operation: &'static str, output: Output) -> Result<Vec<u8>, Error> {
@@ -155,7 +190,7 @@ async fn run(
 ) -> Result<Output, Error> {
     let mut command = Command::new("helm");
     command
-        .args([operation, RELEASE, "--namespace", namespace])
+        .args([operation, "--namespace", namespace])
         .args(args)
         .env("HELM_DRIVER", "secret")
         .kill_on_drop(true);

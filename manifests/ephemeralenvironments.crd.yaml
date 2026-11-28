@@ -23,16 +23,6 @@ spec:
               description: A request for a dedicated Kubernetes namespace and optional Helm release.
               type: object
               properties:
-                apiPostgres:
-                  description: Opt in to the bundled PostgREST and Postgres chart.
-                  nullable: true
-                  type: object
-                  properties:
-                    apiVersion:
-                      description: An approved PostgREST version. Changing it upgrades the same release.
-                      enum: [v16.5, v16.6]
-                      type: string
-                  required: [apiVersion]
                 templateRef:
                   description: Approved catalog entry. Once set, this reference stays with the environment.
                   maxLength: 63
@@ -66,12 +56,8 @@ spec:
                         format: int32
                         type: integer
               x-kubernetes-validations:
-                - rule: "!has(oldSelf.apiPostgres) || has(self.apiPostgres)"
-                  message: delete the environment to remove its API and Postgres stack
                 - rule: "!has(oldSelf.templateRef) || (has(self.templateRef) && self.templateRef == oldSelf.templateRef)"
                   message: templateRef is immutable once set
-                - rule: "!has(self.apiPostgres) || !has(self.templateRef)"
-                  message: choose either templateRef or apiPostgres
                 - rule: "!has(self.values) || has(self.templateRef)"
                   message: values requires templateRef
             status:
@@ -101,7 +87,7 @@ spec:
                       type: boolean
                     reason:
                       description: The result of the check.
-                      enum: [ReleaseReady, WorkloadsNotReady, ReconcileFailed, TemplateRejected, ReleasePending]
+                      enum: [ReleaseReady, WorkloadsNotReady, ReconcileFailed, TemplateRejected, UnmanagedRelease, ReleasePending]
                       type: string
                     releaseRevision:
                       description: Revision of the release, when known.
