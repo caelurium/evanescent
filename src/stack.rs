@@ -1,8 +1,5 @@
-use evanescent::environment::{PostgrestVersion, StackReason, StackStatus};
-use k8s_openapi::api::{
-    apps::v1::{Deployment, StatefulSet},
-    rbac::v1::{RoleBinding, RoleRef, Subject},
-};
+use evanescent::environment::{StackReason, StackStatus};
+use k8s_openapi::api::rbac::v1::{RoleBinding, RoleRef, Subject};
 use kube::{
     Api, Client,
     api::{ObjectMeta, PostParams},
@@ -11,12 +8,7 @@ use thiserror::Error;
 
 use crate::{catalog, helm};
 
-const BUNDLED_CHART: &str = "/opt/evanescent/charts/api-postgres";
-
-const CHART_VERSION: &str = "0.1.0";
 const ROLE: &str = "evanescent-helm";
-const API_DEPLOYMENT: &str = "api";
-const DATABASE_STATEFUL_SET: &str = "postgres";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -35,6 +27,7 @@ impl Error {
         match self {
             Self::Helm(helm::Error::Pending) => StackReason::ReleasePending,
             Self::Catalog(_) => StackReason::TemplateRejected,
+            Self::Helm(helm::Error::UnmanagedRelease) => StackReason::UnmanagedRelease,
             _ => StackReason::ReconcileFailed,
         }
     }
@@ -44,47 +37,11 @@ pub async fn reconcile(
     client: Client,
     namespace: &str,
     control_namespace: &str,
-    version: PostgrestVersion,
-    generation: i64,
-) -> Result<StackStatus, Error> {
-    ensure_access(client.clone(), namespace, control_namespace).await?;
-    let image = api_image(version);
-    let desired = format!("evanescent/api-postgres/{CHART_VERSION}/{image}");
-    let values = format!("api.image={image}");
-    let revision = helm::deploy(
-        namespace,
-        BUNDLED_CHART,
-        &desired,
-        &["--set-string", &values],
-    )
-    .await?;
-    let ready = workloads_ready(client, namespace).await?;
-    Ok(StackStatus {
-        observed_generation: generation,
-        ready,
-        reason: if ready {
-            StackReason::ReleaseReady
-        } else {
-            StackReason::WorkloadsNotReady
-        },
-        release_revision: Some(revision),
-    })
-}
-
-pub async fn reconcile_chart(
-    client: Client,
-    namespace: &str,
-    control_namespace: &str,
     release: catalog::Release<'_>,
     generation: i64,
 ) -> Result<StackStatus, Error> {
     ensure_access(client, namespace, control_namespace).await?;
-    let mut args = vec![
-        "--reset-values",
-        "--wait-for-jobs",
-        "--labels",
-        "evanescent.caelurium.github.io/source=oci",
-    ];
+    let mut args = Vec::new();
     if release.plain_http {
         args.push("--plain-http");
     }
@@ -98,6 +55,12 @@ pub async fn reconcile_chart(
         reason: StackReason::ReleaseReady,
         release_revision: Some(revision),
     })
+}
+
+/// Helm access is created before any release, including under older controllers.
+pub async fn has_access(client: Client, namespace: &str) -> Result<bool, kube::Error> {
+    let bindings: Api<RoleBinding> = Api::namespaced(client, namespace);
+    Ok(bindings.get_opt(ROLE).await?.is_some())
 }
 
 pub async fn uninstall(
@@ -144,50 +107,4 @@ async fn ensure_access(
         bindings.create(&PostParams::default(), &binding).await?;
     }
     Ok(())
-}
-
-async fn workloads_ready(client: Client, namespace: &str) -> Result<bool, kube::Error> {
-    let deployments: Api<Deployment> = Api::namespaced(client.clone(), namespace);
-    let stateful_sets: Api<StatefulSet> = Api::namespaced(client, namespace);
-    let Some(api) = deployments.get_opt(API_DEPLOYMENT).await? else {
-        return Ok(false);
-    };
-    let Some(database) = stateful_sets.get_opt(DATABASE_STATEFUL_SET).await? else {
-        return Ok(false);
-    };
-    Ok(api.status.is_some_and(|status| {
-        status.observed_generation == api.metadata.generation
-            && status.updated_replicas == Some(1)
-            && status.available_replicas == Some(1)
-            && status.replicas == Some(1)
-    }) && database.status.is_some_and(|status| {
-        status.observed_generation == database.metadata.generation
-            && status.ready_replicas == Some(1)
-            && status.current_revision == status.update_revision
-    }))
-}
-
-fn api_image(version: PostgrestVersion) -> &'static str {
-    match version {
-        PostgrestVersion::V16_5 => {
-            "postgrest/postgrest:v16.5@sha256:1347d7552b88f17832912c06afbf7c43209af6eeeb60834b04aae12c9bd9d5cc"
-        }
-        PostgrestVersion::V16_6 => {
-            "postgrest/postgrest:v16.6@sha256:5ce030c153500fe90ba157da4da8ba99ab51d3bc7b95e071bd0b544b67a632f7"
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::Value;
-
-    use super::CHART_VERSION;
-
-    #[test]
-    fn release_identity_uses_the_bundled_chart_version() {
-        let chart: Value =
-            serde_saphyr::from_str(include_str!("../charts/api-postgres/Chart.yaml")).unwrap();
-        assert_eq!(chart["version"], CHART_VERSION);
-    }
 }

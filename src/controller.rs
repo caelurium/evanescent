@@ -1,6 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-use evanescent::environment::{EphemeralEnvironment, EphemeralEnvironmentStatus, StackStatus};
+use evanescent::environment::{
+    EphemeralEnvironment, EphemeralEnvironmentStatus, StackReason, StackStatus,
+};
 use futures::StreamExt;
 use k8s_openapi::{
     api::core::v1::Namespace, apimachinery::pkg::apis::meta::v1::Time, jiff::Timestamp,
@@ -135,12 +137,12 @@ async fn apply(env: &EphemeralEnvironment, ctx: &Context) -> Result<Action, Reco
         return Ok(Action::requeue(Duration::ZERO));
     }
 
-    if env.spec.api_postgres.is_some() || env.spec.template_ref.is_some() {
+    if let Some(template) = &env.spec.template_ref {
         if expiry::is_due(expires_at.as_ref(), Timestamp::now()) {
             return expire(env, ctx, uid).await;
         }
         let generation = env.metadata.generation.unwrap_or_default();
-        match reconcile_stack(env, ctx, &name, generation).await {
+        match reconcile_stack(env, ctx, &name, template, generation).await {
             Ok(status) => update_status(env, ctx, name, expires_at.as_ref(), Some(status)).await?,
             Err(error) => {
                 let status = StackStatus {
@@ -153,6 +155,15 @@ async fn apply(env: &EphemeralEnvironment, ctx: &Context) -> Result<Action, Reco
                 return Err(error.into());
             }
         }
+    } else if has_stack(env, ctx, &name).await? {
+        // A release created under an older API can still be uninstalled.
+        let status = StackStatus {
+            observed_generation: env.metadata.generation.unwrap_or_default(),
+            ready: false,
+            reason: StackReason::UnmanagedRelease,
+            release_revision: None,
+        };
+        update_status(env, ctx, name, expires_at.as_ref(), Some(status)).await?;
     }
 
     // Check for out-of-band namespace deletion without a cluster-wide watch.
@@ -167,30 +178,34 @@ async fn reconcile_stack(
     env: &EphemeralEnvironment,
     ctx: &Context,
     namespace: &str,
+    template: &str,
     generation: i64,
 ) -> Result<StackStatus, stack::Error> {
-    if let Some(template) = &env.spec.template_ref {
-        let release = ctx.catalog.resolve(template, env.spec.values.as_ref())?;
-        return stack::reconcile_chart(
-            ctx.client.clone(),
-            namespace,
-            CONTROL_NAMESPACE,
-            release,
-            generation,
-        )
-        .await;
+    let release = ctx.catalog.resolve(template, env.spec.values.as_ref())?;
+    stack::reconcile(
+        ctx.client.clone(),
+        namespace,
+        CONTROL_NAMESPACE,
+        release,
+        generation,
+    )
+    .await
+}
+
+async fn has_stack(
+    env: &EphemeralEnvironment,
+    ctx: &Context,
+    namespace: &str,
+) -> Result<bool, kube::Error> {
+    if env.spec.template_ref.is_some()
+        || env
+            .status
+            .as_ref()
+            .is_some_and(|status| status.namespace == namespace && status.stack.is_some())
+    {
+        return Ok(true);
     }
-    if let Some(spec) = &env.spec.api_postgres {
-        return stack::reconcile(
-            ctx.client.clone(),
-            namespace,
-            CONTROL_NAMESPACE,
-            spec.api_version,
-            generation,
-        )
-        .await;
-    }
-    unreachable!("a stack was requested")
+    stack::has_access(ctx.client.clone(), namespace).await
 }
 
 async fn expire(
@@ -257,7 +272,7 @@ async fn cleanup(env: &EphemeralEnvironment, ctx: &Context) -> Result<Action, Re
         return Ok(Action::await_change());
     }
     if ns.metadata.deletion_timestamp.is_none() {
-        if env.spec.api_postgres.is_some() || env.spec.template_ref.is_some() {
+        if has_stack(env, ctx, &name).await? {
             stack::uninstall(ctx.client.clone(), &name, CONTROL_NAMESPACE).await?;
         }
         let params = DeleteParams {

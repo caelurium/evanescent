@@ -55,7 +55,6 @@ mod tests {
         EphemeralEnvironment::new(
             "demo",
             EphemeralEnvironmentSpec {
-                api_postgres: None,
                 template_ref: None,
                 values: None,
                 ttl_seconds,
