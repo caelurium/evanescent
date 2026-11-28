@@ -151,7 +151,7 @@ echo "29cbf019c5e013d9455c89fa29be66d2dd9007c84ed51b969220225fd1b7983c  $workdir
   --namespace smoke-ingress --create-namespace --skip-crds \
   --set service.spec.type=ClusterIP,ingressClass.name=evanescent-preview,ingressClass.isDefaultClass=false \
   --set providers.kubernetesIngress.ingressClass=evanescent-preview,providers.kubernetesCRD.enabled=false \
-  --set image.versionOverride=v3.8.0,image.digest=sha256:00c9734983e74ae35a1fc18eaee9e9da13f3dde95c4e45b3b8c3b60e0dbd2d17
+  --set versionOverride=v3.8.0,image.digest=sha256:00c9734983e74ae35a1fc18eaee9e9da13f3dde95c4e45b3b8c3b60e0dbd2d17
 kubectl -n smoke-ingress rollout status deployment/evanescent-preview-traefik --timeout=120s
 port_forward 80 -n smoke-ingress service/evanescent-preview-traefik
 preview="http://127.0.0.1:$forwarded_port"
