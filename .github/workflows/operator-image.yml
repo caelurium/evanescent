@@ -11,6 +11,7 @@ on:
       - Cargo.lock
       - rust-toolchain.toml
       - scripts/kind-smoke.sh
+      - scripts/fixtures/**
   release:
     types: [published]
 

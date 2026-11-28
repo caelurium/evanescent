@@ -5,7 +5,6 @@ use thiserror::Error;
 use tokio::{process::Command, time::timeout};
 
 const RELEASE: &str = "evanescent";
-const CHART: &str = "/opt/evanescent/charts/api-postgres";
 const HELM_TIMEOUT: &str = "120s";
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(20);
 // A failed upgrade can use the wait timeout again for its rollback.
@@ -59,7 +58,12 @@ fn release_action(release: Option<Release>, desired: &str) -> ReleaseAction {
     }
 }
 
-pub async fn deploy(namespace: &str, image: &str, desired: &str) -> Result<i32, Error> {
+pub async fn deploy(
+    namespace: &str,
+    chart: &str,
+    desired: &str,
+    extra_args: &[&str],
+) -> Result<i32, Error> {
     match release_action(latest_release(namespace).await?, desired) {
         ReleaseAction::Keep(revision) => return Ok(revision),
         // Don't delete data or guess whether an interrupted operation is safe to repeat.
@@ -67,27 +71,21 @@ pub async fn deploy(namespace: &str, image: &str, desired: &str) -> Result<i32, 
         ReleaseAction::Upgrade => {}
     }
 
-    let values = format!("api.image={image}");
-    let output = run(
-        "upgrade",
-        namespace,
-        &[
-            "--install",
-            CHART,
-            "--set-string",
-            &values,
-            "--description",
-            desired,
-            "--hide-notes",
-            "--wait=legacy",
-            "--timeout",
-            HELM_TIMEOUT,
-            "--rollback-on-failure",
-            "--history-max=5",
-        ],
-        RELEASE_TIMEOUT,
-    )
-    .await?;
+    let mut args = vec![
+        "--install",
+        chart,
+        "--description",
+        desired,
+        "--hide-notes",
+        "--skip-crds",
+        "--wait=legacy",
+        "--timeout",
+        HELM_TIMEOUT,
+        "--rollback-on-failure",
+        "--history-max=5",
+    ];
+    args.extend_from_slice(extra_args);
+    let output = run("upgrade", namespace, &args, RELEASE_TIMEOUT).await?;
     succeeded("upgrade", output)?;
     match release_action(latest_release(namespace).await?, desired) {
         ReleaseAction::Keep(revision) => Ok(revision),

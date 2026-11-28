@@ -1,0 +1,5 @@
+apiVersion: v2
+name: web
+description: Database-free chart for the Evanescent OCI smoke test
+type: application
+version: 0.1.0

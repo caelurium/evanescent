@@ -1,11 +1,13 @@
+mod catalog;
 mod controller;
 mod expiry;
 mod helm;
 mod stack;
 
 #[tokio::main]
-async fn main() -> Result<(), kube::Error> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
-    controller::run(kube::Client::try_default().await?).await;
+    let catalog = catalog::Catalog::from_env()?;
+    controller::run(kube::Client::try_default().await?, catalog).await;
     Ok(())
 }

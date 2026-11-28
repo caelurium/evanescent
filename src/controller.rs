@@ -18,13 +18,14 @@ use kube::{
 use serde_json::json;
 use thiserror::Error;
 
-use crate::{expiry, stack};
+use crate::{catalog::Catalog, expiry, stack};
 
 const CONTROL_NAMESPACE: &str = "evanescent-system";
 const FINALIZER: &str = "evanescent.caelurium.github.io/namespace-cleanup";
 const OWNER_LABEL: &str = "evanescent.caelurium.github.io/environment-uid";
 
 struct Context {
+    catalog: Catalog,
     client: Client,
     environments: Api<EphemeralEnvironment>,
     namespaces: Api<Namespace>,
@@ -48,8 +49,9 @@ enum ReconcileError {
     Expiry(#[from] expiry::Error),
 }
 
-pub async fn run(client: Client) {
+pub async fn run(client: Client, catalog: Catalog) {
     let ctx = Arc::new(Context {
+        catalog,
         environments: Api::namespaced(client.clone(), CONTROL_NAMESPACE),
         namespaces: Api::all(client.clone()),
         client,
@@ -131,20 +133,12 @@ async fn apply(env: &EphemeralEnvironment, ctx: &Context) -> Result<Action, Reco
         return Ok(Action::requeue(Duration::ZERO));
     }
 
-    if let Some(spec) = &env.spec.api_postgres {
+    if env.spec.api_postgres.is_some() || env.spec.template_ref.is_some() {
         if expiry::is_due(expires_at.as_ref(), Timestamp::now()) {
             return expire(env, ctx, uid).await;
         }
         let generation = env.metadata.generation.unwrap_or_default();
-        match stack::reconcile(
-            ctx.client.clone(),
-            &name,
-            CONTROL_NAMESPACE,
-            spec.api_version,
-            generation,
-        )
-        .await
-        {
+        match reconcile_stack(env, ctx, &name, generation).await {
             Ok(status) => update_status(env, ctx, name, expires_at.as_ref(), Some(status)).await?,
             Err(error) => {
                 let status = StackStatus {
@@ -165,6 +159,36 @@ async fn apply(env: &EphemeralEnvironment, ctx: &Context) -> Result<Action, Reco
         Timestamp::now(),
         Duration::from_secs(30),
     )))
+}
+
+async fn reconcile_stack(
+    env: &EphemeralEnvironment,
+    ctx: &Context,
+    namespace: &str,
+    generation: i64,
+) -> Result<StackStatus, stack::Error> {
+    if let Some(template) = &env.spec.template_ref {
+        let release = ctx.catalog.resolve(template, env.spec.values.as_ref())?;
+        return stack::reconcile_chart(
+            ctx.client.clone(),
+            namespace,
+            CONTROL_NAMESPACE,
+            release,
+            generation,
+        )
+        .await;
+    }
+    if let Some(spec) = &env.spec.api_postgres {
+        return stack::reconcile(
+            ctx.client.clone(),
+            namespace,
+            CONTROL_NAMESPACE,
+            spec.api_version,
+            generation,
+        )
+        .await;
+    }
+    unreachable!("a stack was requested")
 }
 
 async fn expire(
@@ -231,7 +255,7 @@ async fn cleanup(env: &EphemeralEnvironment, ctx: &Context) -> Result<Action, Re
         return Ok(Action::await_change());
     }
     if ns.metadata.deletion_timestamp.is_none() {
-        if env.spec.api_postgres.is_some() {
+        if env.spec.api_postgres.is_some() || env.spec.template_ref.is_some() {
             stack::uninstall(ctx.client.clone(), &name, CONTROL_NAMESPACE).await?;
         }
         let params = DeleteParams {

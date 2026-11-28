@@ -11,6 +11,7 @@ environment=ephemeralenvironment/demo-stack
 deployment=deployment/evanescent
 selector=app.kubernetes.io/name=evanescent
 proxy_pid=
+forward_pid=
 namespace=
 export KUBECONFIG="$workdir/kubeconfig"
 
@@ -23,6 +24,10 @@ cleanup() {
   if [[ -n "$proxy_pid" ]]; then
     kill "$proxy_pid" 2>/dev/null || :
     wait "$proxy_pid" 2>/dev/null || :
+  fi
+  if [[ -n "$forward_pid" ]]; then
+    kill "$forward_pid" 2>/dev/null || :
+    wait "$forward_pid" 2>/dev/null || :
   fi
   if (( status != 0 )); then
     env_kubectl --request-timeout=5s describe pods -l "$selector" || :
@@ -37,8 +42,7 @@ cleanup() {
   fi
   kind delete cluster --name "$cluster" || :
   docker image rm "$image" 2>/dev/null || :
-  rm -f "$workdir/kubeconfig" "$workdir/proxy.log"
-  rmdir "$workdir"
+  rm -rf "$workdir"
 }
 trap cleanup EXIT
 
@@ -159,3 +163,77 @@ kubectl get namespace "$namespace" -o name
 env_kubectl wait --for=delete --timeout=90s "$environment"
 remaining="$(kubectl get namespace "$namespace" --ignore-not-found -o name)"
 [[ -z "$remaining" ]]
+
+# An administrator publishes and approves a database-free chart by digest.
+registry="deployment/smoke-registry"
+env_kubectl create deployment smoke-registry --port=5000 \
+  --image=registry@sha256:82f6ff4a7f982960c8aa51617fea3aabc485df6e55cce80d22deb1de36f1bc3c
+env_kubectl expose "$registry" --port=5000
+env_kubectl rollout status "$registry" --timeout=90s
+env_kubectl port-forward service/smoke-registry :5000 > "$workdir/registry.log" 2>&1 &
+forward_pid=$!
+registry_port=
+for ((attempt = 0; attempt < 50; attempt++)); do
+  registry_port="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9][0-9]*\) -> 5000$/\1/p' "$workdir/registry.log")"
+  [[ -z "$registry_port" ]] || break
+  kill -0 "$forward_pid"
+  sleep 0.1
+done
+[[ -n "$registry_port" ]] || { cat "$workdir/registry.log" >&2; exit 1; }
+
+# Use the exact Helm client shipped in the image for the OCI round trip.
+env_kubectl exec "$deployment" -- cat /usr/local/bin/helm > "$workdir/helm"
+chmod +x "$workdir/helm"
+"$workdir/helm" package scripts/fixtures/web --destination "$workdir"
+push_output="$("$workdir/helm" push --plain-http "$workdir/web-0.1.0.tgz" \
+  "oci://127.0.0.1:$registry_port/smoke" 2>&1)"
+chart_digest="$(sed -n 's/^Digest: //p' <<<"$push_output")"
+[[ "$chart_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "$push_output" >&2; exit 1; }
+cat > "$workdir/catalog.json" <<EOF
+{
+  "web": {
+    "chart": "oci://smoke-registry.$system_namespace.svc:5000/smoke/web@$chart_digest",
+    "plainHttp": true,
+    "imageRepositories": {"image": "docker.io/library/nginx"},
+    "replicaLimits": {"replicaCount": 2}
+  }
+}
+EOF
+env_kubectl create configmap evanescent-chart-catalog --from-file="$workdir/catalog.json"
+env_kubectl rollout restart "$deployment"
+env_kubectl rollout status "$deployment" --timeout=90s
+
+kubectl apply -f examples/chart-environment.yaml
+environment=ephemeralenvironment/demo-web
+namespace="evanescent-$(env_kubectl get "$environment" -o jsonpath='{.metadata.uid}')"
+env_kubectl wait --for='jsonpath={.status.stack.ready}=true' --timeout=180s "$environment"
+[[ "$(env_kubectl get "$environment" -o jsonpath='{.status.stack.releaseRevision}')" == 1 ]]
+kubectl -n "$namespace" rollout status deployment/web --timeout=90s
+[[ "$(kubectl -n "$namespace" get deployment/web -o jsonpath='{.status.readyReplicas}')" == 2 ]]
+uid="$(kubectl -n "$namespace" get deployment/web -o jsonpath='{.metadata.uid}')"
+
+# A catalog violation changes status without replacing or upgrading the release.
+env_kubectl patch "$environment" --type=merge -p '{"spec":{"values":{"replicas":{"replicaCount":3}}}}'
+env_kubectl wait --for='jsonpath={.status.stack.reason}=TemplateRejected' --timeout=60s "$environment"
+[[ "$(kubectl -n "$namespace" get deployment/web -o jsonpath='{.spec.replicas}')" == 2 ]]
+updated_image=docker.io/library/nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+env_kubectl patch "$environment" --type=merge \
+  -p "{\"spec\":{\"values\":{\"replicas\":{\"replicaCount\":2},\"images\":{\"image\":\"$updated_image\"}}}}"
+env_kubectl wait --for='jsonpath={.status.stack.releaseRevision}=2' --timeout=180s "$environment"
+kubectl -n "$namespace" rollout status deployment/web --timeout=90s
+[[ "$(kubectl -n "$namespace" get deployment/web -o jsonpath='{.metadata.uid}')" == "$uid" ]]
+[[ "$(kubectl -n "$namespace" get deployment/web -o jsonpath='{.spec.template.spec.containers[0].image}')" == "$updated_image" ]]
+[[ "$(kubectl -n "$namespace" get deployment/web -o jsonpath='{.status.readyReplicas}')" == 2 ]]
+
+# Cleanup uses the stored release even if the catalog entry is removed.
+env_kubectl delete configmap evanescent-chart-catalog
+env_kubectl rollout restart "$deployment"
+env_kubectl rollout status "$deployment" --timeout=90s
+kubectl patch namespace "$namespace" --type=merge \
+  -p '{"metadata":{"finalizers":["evanescent.caelurium.github.io/smoke-hold"]}}'
+env_kubectl patch "$environment" --type=merge -p '{"spec":{"ttlSeconds":1}}'
+kubectl wait --for='jsonpath={.status.phase}=Terminating' --timeout=180s "namespace/$namespace"
+[[ -z "$(kubectl -n "$namespace" get secrets -l owner=helm,name=evanescent -o name)" ]]
+kubectl patch namespace "$namespace" --type=merge -p '{"metadata":{"finalizers":null}}'
+env_kubectl wait --for=delete --timeout=90s "$environment"
+[[ -z "$(kubectl get namespace "$namespace" --ignore-not-found -o name)" ]]

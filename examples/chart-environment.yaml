@@ -1,0 +1,13 @@
+apiVersion: evanescent.caelurium.github.io/v1alpha1
+kind: EphemeralEnvironment
+metadata:
+  name: demo-web
+  namespace: evanescent-system
+spec:
+  templateRef: web
+  values:
+    images:
+      image: docker.io/library/nginx@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
+    replicas:
+      replicaCount: 2
+  ttlSeconds: 3600

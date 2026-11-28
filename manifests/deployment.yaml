@@ -24,6 +24,13 @@ spec:
         - name: evanescent
           image: evanescent:dev
           imagePullPolicy: IfNotPresent
+          env:
+            - name: EVANESCENT_CHART_CATALOG
+              valueFrom:
+                configMapKeyRef:
+                  name: evanescent-chart-catalog
+                  key: catalog.json
+                  optional: true
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

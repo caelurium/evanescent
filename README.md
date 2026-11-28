@@ -134,3 +134,55 @@ release.
 
 To enable publishing, configure the `RELEASE_PLEASE_TOKEN` Actions secret
 with access to create release PRs and publish releases in this repository.
+
+### Use an approved OCI chart
+
+A cluster administrator publishes the chart and creates a ConfigMap named
+`evanescent-chart-catalog` in `evanescent-system`. Put a JSON object in the
+`catalog.json` key. Each key in that object is a `spec.templateRef` a request
+can select. For example, save the following as `catalog.json` and replace the
+chart reference with the digest printed by `helm push`.
+
+```json
+{
+  "web": {
+    "chart": "oci://registry.example.com/team/charts/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "imageRepositories": {"image": "docker.io/library/nginx"},
+    "replicaLimits": {"replicaCount": 3}
+  }
+}
+```
+
+```sh
+kubectl -n evanescent-system create configmap evanescent-chart-catalog \
+  --from-file=catalog.json --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n evanescent-system rollout restart deployment/evanescent
+kubectl apply -f examples/chart-environment.yaml
+```
+
+Publish charts to an OCI registry reachable by the operator. Package any
+dependencies inside the chart. Chart pulls use HTTPS by default. An
+administrator can set `plainHttp: true` for a local development registry.
+The packaged operator supports anonymous chart pulls by default. For a private
+registry, mount a Helm registry credentials file and set `HELM_REGISTRY_CONFIG`
+on the operator Deployment. Control access to the catalog and Deployment as
+you would other operator configuration.
+
+Approve only trusted charts and image repositories. Review chart defaults,
+workload permissions, hooks, and value paths before approving them. Images
+supplied by callers must match an approved repository and include a SHA-256
+digest. Replica overrides must be between zero and the approved maximum. Map
+keys are Helm value paths such as `app.image` and `app.replicaCount`. Charts
+run in the allocated namespace under the operator's Helm RBAC and support
+namespaced workloads such as Deployments, StatefulSets, Jobs, and Services.
+Cluster-scoped resources and chart-installed CRDs are outside that permission
+set.
+
+After a request sets `templateRef`, it keeps that reference for its lifetime.
+To roll out a new chart version to all requests using the reference, change
+its catalog digest and restart the operator. To roll out a new app build to one
+request, update its image digest. The same Helm release is upgraded in each
+case. Status reports the generation that last passed Helm's release wait,
+including Job completion, and the release revision. Use Kubernetes workload
+status for ongoing health. Removing a catalog entry blocks new deployments
+and upgrades for that reference. Deletion and TTL still uninstall its release.
