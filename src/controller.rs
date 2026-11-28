@@ -18,7 +18,7 @@ use kube::{
 use serde_json::json;
 use thiserror::Error;
 
-use crate::{catalog::Catalog, expiry, stack};
+use crate::{budget, catalog::Catalog, expiry, stack};
 
 const CONTROL_NAMESPACE: &str = "evanescent-system";
 const FINALIZER: &str = "evanescent.caelurium.github.io/namespace-cleanup";
@@ -122,6 +122,8 @@ async fn apply(env: &EphemeralEnvironment, ctx: &Context) -> Result<Action, Reco
             tracing::info!(namespace = name, "created environment namespace");
         }
     }
+
+    budget::ensure(ctx.client.clone(), &name).await?;
 
     let current = env
         .status

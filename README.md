@@ -186,3 +186,31 @@ case. Status reports the generation that last passed Helm's release wait,
 including Job completion, and the release revision. Use Kubernetes workload
 status for ongoing health. Removing a catalog entry blocks new deployments
 and upgrades for that reference. Deletion and TTL still uninstall its release.
+
+### Configure preview routing and quotas
+
+Charts can own standard `networking.k8s.io/v1` Ingress resources. The platform
+administrator installs an ingress controller and sets the approved class and
+domain in the `evanescent-ingresses` admission policy in
+`manifests/rbac.yaml`. The defaults are `evanescent-preview` and
+`preview.example.com`. Configure DNS and TLS for the chosen domain and
+IngressClass on the cluster.
+
+Set `spec.ingressClassName` in the chart. Each rule must use the allocated
+namespace as a subdomain, for example
+`{{ .Release.Namespace }}.preview.example.com` or
+`api.{{ .Release.Namespace }}.preview.example.com`. Charts can choose paths,
+backend Services, and TLS configuration for those hosts. The policy rejects
+wildcards, hostless rules, and routes for other environments. Administrators
+can add trusted controller-specific annotation keys to the policy's
+`allowedAnnotations` list after reviewing how they affect routing. Helm updates
+and deletes the Ingress with the release. DNS and HTTP availability are
+independent of the Helm release readiness check.
+
+Evanescent creates a ResourceQuota and LimitRange named `evanescent` before
+deploying any chart. The default quota allows 20 pods, 4 requested CPUs,
+8 GiB of requested memory, 8 CPUs in limits, and 16 GiB in memory limits.
+Containers without resource settings get requests of 100 millicores and
+64 MiB and limits of 250 millicores and 256 MiB. Administrators can edit those
+objects in a workload namespace. Reconciliation preserves existing budgets.
+When setting replica counts, reserve quota for pods created during rollouts.

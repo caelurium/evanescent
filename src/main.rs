@@ -1,3 +1,4 @@
+mod budget;
 mod catalog;
 mod controller;
 mod expiry;
