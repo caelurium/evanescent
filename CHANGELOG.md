@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.0](https://github.com/caelurium/evanescent/compare/v0.7.0...v0.8.0) (2026-11-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* The `spec.apiPostgres` field is retired. Migrate to an approved OCI chart or delete the old environment before upgrading.
+
+### Features
+
+* retire the bundled Postgres stack ([fa00f99](https://github.com/caelurium/evanescent/commit/fa00f99e74d3b5d2ce3dee5d735f5603e258df93))
+
 ## [0.7.0](https://github.com/caelurium/evanescent/compare/v0.6.0...v0.7.0) (2026-11-28)
 
 
