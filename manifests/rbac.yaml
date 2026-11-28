@@ -79,6 +79,90 @@ spec:
   policyName: evanescent-helm-bindings
   validationActions: [Deny]
 ---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: evanescent-budgets
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [limitranges, resourcequotas]
+        scope: Namespaced
+  matchConditions:
+    - name: controller
+      expression: "request.userInfo.username == 'system:serviceaccount:evanescent-system:evanescent'"
+  validations:
+    - expression: >-
+        object.metadata.name == 'evanescent' &&
+        namespaceObject != null &&
+        has(namespaceObject.metadata.labels) &&
+        'evanescent.caelurium.github.io/environment-uid' in namespaceObject.metadata.labels &&
+        request.namespace == 'evanescent-' +
+          namespaceObject.metadata.labels['evanescent.caelurium.github.io/environment-uid']
+      message: Evanescent can create a budget only inside its workload namespaces.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: evanescent-budgets
+spec:
+  policyName: evanescent-budgets
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: evanescent-ingresses
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [networking.k8s.io]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [ingresses]
+        scope: Namespaced
+  variables:
+    - name: ingressClass
+      expression: "'evanescent-preview'"
+    - name: domain
+      expression: "'preview.example.com'"
+    - name: baseHost
+      expression: "request.namespace + '.' + variables.domain"
+  validations:
+    - expression: >-
+        has(object.spec.ingressClassName) && object.spec.ingressClassName == variables.ingressClass &&
+        (!has(object.metadata.annotations) || !('kubernetes.io/ingress.class' in object.metadata.annotations))
+      message: Use the approved preview IngressClass through spec.ingressClassName.
+    - expression: >-
+        !has(object.spec.defaultBackend) && has(object.spec.rules) && size(object.spec.rules) > 0 &&
+        object.spec.rules.all(rule,
+          has(rule.host) && !rule.host.startsWith('*.') &&
+          (rule.host == variables.baseHost || rule.host.endsWith('.' + variables.baseHost)))
+      message: Ingress rules must use explicit hostnames under the environment's preview domain.
+    - expression: >-
+        !has(object.spec.tls) || object.spec.tls.all(tls,
+          has(tls.hosts) && size(tls.hosts) > 0 &&
+          tls.hosts.all(host, object.spec.rules.exists(rule, has(rule.host) && rule.host == host)))
+      message: Ingress TLS hosts must match the specified rules.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: evanescent-ingresses
+spec:
+  policyName: evanescent-ingresses
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: evanescent.caelurium.github.io/environment-uid
+          operator: Exists
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -87,6 +171,13 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get, create, delete]
+  - apiGroups: [""]
+    resources: [limitranges, resourcequotas]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [limitranges, resourcequotas]
+    resourceNames: [evanescent]
+    verbs: [get]
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [rolebindings]
     verbs: [create]
@@ -128,4 +219,7 @@ rules:
     verbs: [get, list]
   - apiGroups: [batch]
     resources: [cronjobs, jobs]
+    verbs: [get, list, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
     verbs: [get, list, create, update, patch, delete]

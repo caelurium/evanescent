@@ -19,16 +19,37 @@ env_kubectl() {
   kubectl -n "$system_namespace" "$@"
 }
 
+stop_forward() {
+  if [[ -n "$forward_pid" ]]; then
+    kill "$forward_pid" 2>/dev/null || :
+    wait "$forward_pid" 2>/dev/null || :
+    forward_pid=
+  fi
+}
+
+port_forward() {
+  local target_port=$1
+  shift
+  kubectl port-forward "$@" ":$target_port" > "$workdir/forward.log" 2>&1 &
+  forward_pid=$!
+  forwarded_port=
+  for ((attempt = 0; attempt < 50; attempt++)); do
+    forwarded_port="$(sed -n "s/^Forwarding from 127[.]0[.]0[.]1:\([0-9]*\) -> [0-9]*$/\1/p" "$workdir/forward.log")"
+    [[ -z "$forwarded_port" ]] || return 0
+    kill -0 "$forward_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  cat "$workdir/forward.log" >&2
+  return 1
+}
+
 cleanup() {
   local status=$?
   if [[ -n "$proxy_pid" ]]; then
     kill "$proxy_pid" 2>/dev/null || :
     wait "$proxy_pid" 2>/dev/null || :
   fi
-  if [[ -n "$forward_pid" ]]; then
-    kill "$forward_pid" 2>/dev/null || :
-    wait "$forward_pid" 2>/dev/null || :
-  fi
+  stop_forward
   if (( status != 0 )); then
     env_kubectl --request-timeout=5s describe pods -l "$selector" || :
     env_kubectl --request-timeout=5s logs "$deployment" --tail=100 || :
@@ -170,25 +191,31 @@ env_kubectl create deployment smoke-registry --port=5000 \
   --image=registry@sha256:82f6ff4a7f982960c8aa51617fea3aabc485df6e55cce80d22deb1de36f1bc3c
 env_kubectl expose "$registry" --port=5000
 env_kubectl rollout status "$registry" --timeout=90s
-env_kubectl port-forward service/smoke-registry :5000 > "$workdir/registry.log" 2>&1 &
-forward_pid=$!
-registry_port=
-for ((attempt = 0; attempt < 50; attempt++)); do
-  registry_port="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9][0-9]*\) -> 5000$/\1/p' "$workdir/registry.log")"
-  [[ -z "$registry_port" ]] || break
-  kill -0 "$forward_pid"
-  sleep 0.1
-done
-[[ -n "$registry_port" ]] || { cat "$workdir/registry.log" >&2; exit 1; }
+port_forward 5000 -n "$system_namespace" service/smoke-registry
 
 # Use the exact Helm client shipped in the image for the OCI round trip.
 env_kubectl exec "$deployment" -- cat /usr/local/bin/helm > "$workdir/helm"
 chmod +x "$workdir/helm"
 "$workdir/helm" package scripts/fixtures/web --destination "$workdir"
-push_output="$("$workdir/helm" push --plain-http "$workdir/web-0.1.0.tgz" \
-  "oci://127.0.0.1:$registry_port/smoke" 2>&1)"
+push_output="$("$workdir/helm" push --plain-http "$workdir/web-0.2.0.tgz" \
+  "oci://127.0.0.1:$forwarded_port/smoke" 2>&1)"
 chart_digest="$(sed -n 's/^Digest: //p' <<<"$push_output")"
 [[ "$chart_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "$push_output" >&2; exit 1; }
+stop_forward
+
+# Use a real ingress controller and inspect HTTP through its Service.
+curl --fail --silent --show-error --location --retry 3 \
+  https://traefik.github.io/charts/traefik/traefik-43.0.0.tgz -o "$workdir/traefik.tgz"
+echo "29cbf019c5e013d9455c89fa29be66d2dd9007c84ed51b969220225fd1b7983c  $workdir/traefik.tgz" | sha256sum --check
+"$workdir/helm" install evanescent-preview "$workdir/traefik.tgz" \
+  --namespace smoke-ingress --create-namespace --skip-crds \
+  --set service.spec.type=ClusterIP,ingressClass.name=evanescent-preview,ingressClass.isDefaultClass=false \
+  --set providers.kubernetesIngress.ingressClass=evanescent-preview,providers.kubernetesCRD.enabled=false \
+  --set image.versionOverride=v3.8.0,image.digest=sha256:00c9734983e74ae35a1fc18eaee9e9da13f3dde95c4e45b3b8c3b60e0dbd2d17
+kubectl -n smoke-ingress rollout status deployment/evanescent-preview-traefik --timeout=120s
+port_forward 80 -n smoke-ingress service/evanescent-preview-traefik
+preview="http://127.0.0.1:$forwarded_port"
+
 cat > "$workdir/catalog.json" <<EOF
 {
   "web": {
@@ -211,6 +238,43 @@ env_kubectl wait --for='jsonpath={.status.stack.ready}=true' --timeout=180s "$en
 kubectl -n "$namespace" rollout status deployment/web --timeout=90s
 [[ "$(kubectl -n "$namespace" get deployment/web -o jsonpath='{.status.readyReplicas}')" == 2 ]]
 uid="$(kubectl -n "$namespace" get deployment/web -o jsonpath='{.metadata.uid}')"
+
+host="$namespace.preview.example.com"
+curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-delay 1 --max-time 5 \
+  --header "Host: $host" "$preview/" | grep -F 'Welcome to nginx!'
+
+if denial="$(kubectl -n "$namespace" patch ingress web --dry-run=server --type=merge \
+  -p '{"spec":{"ingressClassName":"unapproved"}}' 2>&1)"; then
+  printf 'Accepted an unapproved ingress class\n' >&2
+  exit 1
+fi
+grep -F 'Use the approved preview IngressClass' <<<"$denial"
+if denial="$(kubectl -n "$namespace" patch ingress web --dry-run=server --type=json \
+  -p '[{"op":"replace","path":"/spec/rules/0/host","value":"other.preview.example.com"}]' 2>&1)"; then
+  printf 'Accepted an ingress for another environment\n' >&2
+  exit 1
+fi
+grep -F 'Ingress rules must use explicit hostnames' <<<"$denial"
+
+kubectl -n "$namespace" wait --for='jsonpath={.status.hard.pods}=20' --timeout=30s resourcequota/evanescent
+if denial="$(kubectl -n "$namespace" apply --dry-run=server -f - 2>&1 <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: over-quota
+spec:
+  containers:
+    - name: web
+      image: docker.io/library/nginx@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
+      resources:
+        requests: {cpu: "5", memory: 64Mi}
+        limits: {cpu: "5", memory: 64Mi}
+EOF
+)"; then
+  printf 'Accepted a workload over the namespace CPU quota\n' >&2
+  exit 1
+fi
+grep -F 'exceeded quota: evanescent' <<<"$denial"
 
 # A catalog violation changes status without replacing or upgrading the release.
 env_kubectl patch "$environment" --type=merge -p '{"spec":{"values":{"replicas":{"replicaCount":3}}}}'
@@ -237,3 +301,12 @@ kubectl wait --for='jsonpath={.status.phase}=Terminating' --timeout=180s "namesp
 kubectl patch namespace "$namespace" --type=merge -p '{"metadata":{"finalizers":null}}'
 env_kubectl wait --for=delete --timeout=90s "$environment"
 [[ -z "$(kubectl get namespace "$namespace" --ignore-not-found -o name)" ]]
+
+status=
+for ((attempt = 0; attempt < 30; attempt++)); do
+  status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 3 \
+    --header "Host: $host" "$preview/")"
+  [[ "$status" != 404 ]] || break
+  sleep 1
+done
+[[ "$status" == 404 ]]
