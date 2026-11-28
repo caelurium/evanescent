@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/caelurium/evanescent/compare/v0.6.0...v0.7.0) (2026-11-28)
+
+
+### Features
+
+* enforce preview ingress policy and namespace quotas ([06502a3](https://github.com/caelurium/evanescent/commit/06502a328613dee2ae12a677a4053aeb18470d9a))
+
 ## [0.6.0](https://github.com/caelurium/evanescent/compare/v0.5.0...v0.6.0) (2026-11-28)
 
 
